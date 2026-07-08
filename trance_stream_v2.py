@@ -127,15 +127,18 @@ def build_song_config(seed: str, mood: str) -> SongConfig:
     arp_variant = rng.randint(0, len(_NOTEARP_VARIANTS) - 1)
     notearp_pattern = _NOTEARP_VARIANTS[arp_variant]
 
-    # Stage jitter: ±4 bars, preserving ordering and minimum 0
-    # We'll apply clamping after computing raw offsets
+    # Stage jitter: ±2 bars on early stages, ±6 on late ones.
+    # Small range on early stages so the full arrangement arrives quickly.
+    _jitter_ranges = {
+        "kick_on": (0, 0), "pad_on": (0, 0), "hihat_on": (0, 0),
+        "kick_syncopated": (0, 0),
+        "lead_root_on": (0, 2), "lead_melody_on": (0, 4),
+        "pad_chord_on": (0, 4), "lead_voicing_on": (0, 4),
+        "clap_on": (-2, 4), "pulse_on": (-4, 8), "fm_on": (-8, 8),
+    }
     raw_jitter: dict[str, int] = {}
-    for key in (
-        "kick_on", "pad_on", "lead_root_on", "lead_melody_on",
-        "pad_chord_on", "lead_voicing_on", "clap_on", "fm_on",
-        "pulse_on", "hihat_on", "kick_syncopated",
-    ):
-        raw_jitter[key] = rng.randint(-4, 4)
+    for key, (lo, hi) in _jitter_ranges.items():
+        raw_jitter[key] = rng.randint(lo, hi)
 
     # Filter pullback positions
     pb1 = rng.randint(20, 40)
@@ -235,16 +238,16 @@ HIHAT_ALL_STEPS = True     # fires on all 16 steps
 
 STAGE_BARS: dict[str, int] = {
     "kick_on":           0,    # kick immediately
-    "pad_on":            2,    # pad (single root) within 2 bars
-    "lead_root_on":      8,    # lead enters as single root note
-    "lead_melody_on":   24,    # lead gets full melody + delay
-    "pad_chord_on":     40,    # pad gains moving chord pattern + seg 16
-    "lead_voicing_on":  48,    # lead gains .add bar-varying voicing shift
-    "clap_on":          72,    # clap added (backbeat)
-    "fm_on":            96,    # FM opens on lead
-    "pulse_on":        108,    # pulse texture layer
-    "hihat_on":        112,    # hi-hat
-    "kick_syncopated": 116,    # kick upgrades to beat(0,4,8,11,14)
+    "pad_on":            0,    # pad enters immediately with kick
+    "lead_root_on":      2,    # lead enters fast
+    "lead_melody_on":    4,    # melody + delay from bar 4
+    "pad_chord_on":      4,    # pad chord movement from bar 4
+    "lead_voicing_on":   8,    # voicing shift from bar 8
+    "clap_on":           8,    # clap from bar 8
+    "hihat_on":          0,    # hi-hat from bar 0 — high energy from the start
+    "kick_syncopated":   0,    # syncopated kick immediately
+    "fm_on":            32,    # FM opens in second half
+    "pulse_on":         16,    # pulse texture from bar 16
 }
 
 # Simple 4-on-floor kick before syncopation upgrade.
@@ -288,10 +291,11 @@ def filter_cutoff_arc(bar: int, pb_bars: tuple[int, int] = (32, 77)) -> float:
     t = min(bar / 128.0, 1.0)
     t_pb1 = pb_bars[0] / 128.0
     t_pb2 = pb_bars[1] / 128.0
-    base = 0.55 + 0.33 * t
+    # Start at 0.65 (~5 kHz) so the full arrangement is audible from bar 1.
+    base = 0.65 + 0.23 * t
     pb1 = 0.12 * math.exp(-((t - t_pb1) ** 2) / 0.002)
     pb2 = 0.16 * math.exp(-((t - t_pb2) ** 2) / 0.003)
-    slider = max(0.48, min(0.90, base - pb1 - pb2))
+    slider = max(0.55, min(0.90, base - pb1 - pb2))
     return _rlpf_to_hz(slider)
 
 def fm_depth_arc(bar: int, effective_stage_bars: dict) -> float:
