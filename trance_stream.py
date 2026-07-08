@@ -55,7 +55,7 @@ parser.add_argument(
 parser.add_argument(
     "-v", "--volume",
     type=float,
-    default=0.15,
+    default=0.60,
     help="Master volume (0.0-1.0)",
 )
 parser.add_argument(
@@ -135,9 +135,11 @@ DETUNE_CENTS_BASS: float = 8.0
 DETUNE_CENTS_PAD: float = 20.0
 
 # Per-voice level trims (applied at note creation; tune by ear)
-BASS_LEVEL: float = 0.35   # rolling 16ths; keep under kick
-LEAD_LEVEL: float = 0.55   # 3-voice stack × 1/3 each = effective 0.55; sits in mix
-PAD_LEVEL:  float = 0.20   # wide voicing adds 3 notes incl. bass register; keep low
+KICK_LEVEL: float = 0.90   # kick is the anchor — sits loud and forward
+BASS_LEVEL: float = 0.12   # rolling 16ths; present under kick, not dominant
+LEAD_LEVEL: float = 0.50   # 3-voice stack; prominent melodic presence
+ARP_LEVEL:  float = 0.20   # high-register arp; behind lead
+PAD_LEVEL:  float = 0.15   # background texture; behind everything
 
 # Kick synthesis (starter values; tune by ear)
 KICK_F0: float = 160.0    # Hz, sweep start
@@ -1736,7 +1738,7 @@ def main() -> None:
                         VELOCITY_MIN, VELOCITY_MAX,
                     )
                     al, ar = synthesise_arp(
-                        arp_note, vel / 127.0, 1, samples_per_step
+                        arp_note, vel / 127.0 * ARP_LEVEL, 1, samples_per_step
                     )
                     arp_notes.append(
                         ArpNote(buffer_l=al, buffer_r=ar, sample_pos=0)
@@ -1780,8 +1782,8 @@ def main() -> None:
             kick_l, kick_r = _render_arp_accumulator(
                 kick_notes, samples_per_step
             )
-            kick_l = kick_l * state.kick_gain
-            kick_r = kick_r * state.kick_gain
+            kick_l = kick_l * state.kick_gain * KICK_LEVEL
+            kick_r = kick_r * state.kick_gain * KICK_LEVEL
 
             raw_bass_l, raw_bass_r = _render_accumulator(
                 bass_active, bass_cutoff, samples_per_step
