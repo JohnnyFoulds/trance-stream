@@ -121,27 +121,100 @@ CLAP_STEPS:  frozenset[int] = frozenset({4, 12})
 HIHAT_ALL_STEPS = True     # fires on all 16 steps
 
 # ---------------------------------------------------------------------------
-# Arrangement phases
+# Arrangement — additive stage model
 # ---------------------------------------------------------------------------
+# Research (switch_angel_song_structure.md): arc is strictly additive, no
+# breakdown/drop.  Each entry = bar at which that element first appears.
+# Timings synthesised from GWXCCBsOMSg (narrated) as primary reference,
+# scaled to a ~128-bar session at 140 BPM.
 
-PHASE_BARS = 16
-INTRO_BARS = 4
-PHASE_SEQUENCE = ["Intro", "Groove", "Breakdown", "Buildup", "Drop"]
-
-# Gain targets per phase for each voice.
-# Research: build order = kick → pad → lead.  Lead absent in Intro/Breakdown.
-PHASE_GAINS: dict[str, dict[str, float]] = {
-    "Intro":     {"kick": 0.5, "hihat": 0.4, "clap": 0.0,
-                  "pad": 0.8, "lead": 0.0, "pulse": 0.4},
-    "Groove":    {"kick": 1.0, "hihat": 0.8, "clap": 0.7,
-                  "pad": 1.0, "lead": 1.0, "pulse": 0.3},
-    "Breakdown": {"kick": 0.0, "hihat": 0.3, "clap": 0.0,
-                  "pad": 1.0, "lead": 0.6, "pulse": 0.5},
-    "Buildup":   {"kick": 0.5, "hihat": 1.0, "clap": 0.5,
-                  "pad": 1.0, "lead": 0.0, "pulse": 0.6},
-    "Drop":      {"kick": 1.0, "hihat": 0.8, "clap": 0.7,
-                  "pad": 1.0, "lead": 1.0, "pulse": 0.3},
+STAGE_BARS: dict[str, int] = {
+    "kick_on":           0,    # kick immediately
+    "pad_on":            2,    # pad (single root) within 2 bars
+    "lead_root_on":      8,    # lead enters as single root note
+    "lead_melody_on":   24,    # lead gets full melody + delay
+    "pad_chord_on":     40,    # pad gains moving chord pattern + seg 16
+    "lead_voicing_on":  48,    # lead gains .add bar-varying voicing shift
+    "clap_on":          72,    # clap added (backbeat)
+    "fm_on":            96,    # FM opens on lead
+    "pulse_on":        108,    # pulse texture layer
+    "hihat_on":        112,    # hi-hat
+    "kick_syncopated": 116,    # kick upgrades to beat(0,4,8,11,14)
 }
+
+# Simple 4-on-floor kick before syncopation upgrade.
+KICK_STEPS_SIMPLE:      frozenset[int] = frozenset({0, 4, 8, 12})
+KICK_STEPS_SYNCOPATED:  frozenset[int] = frozenset({0, 4, 8, 11, 14})
+
+# Pad chord cycling degrees — from "<3@3 4 5 @3 6>*2".
+# Changes every 2 bars.
+_PAD_CHORD_DEGREES = [3, 4, 5, 6]
+
+def pad_root_degree(bar: int, chord_active: bool) -> int:
+    if not chord_active:
+        return 0
+    return _PAD_CHORD_DEGREES[(bar // 2) % len(_PAD_CHORD_DEGREES)]
+
+# Lead voicing shift — from ".add 7 .add '<5 [4] 0 <0 2>>'"
+# Before voicing stage: constant +7.  After: rotates per bar.
+_LEAD_VOICING_SHIFTS = [12, 9, 7, 9]   # semitones added on top of chord root
+
+def lead_voicing_semitones(bar: int, voicing_active: bool) -> int:
+    if not voicing_active:
+        return 7
+    return _LEAD_VOICING_SHIFTS[bar % len(_LEAD_VOICING_SHIFTS)]
+
+# ---------------------------------------------------------------------------
+# Parameter arcs — continuous values that evolve over the session
+# ---------------------------------------------------------------------------
+# All documented in switch_angel_song_structure.md §B.6–B.9.
+
+def _rlpf_to_hz(slider: float) -> float:
+    """Convert Strudel rlpf slider value to Hz. Formula: (slider*12)^4."""
+    v = max(0.01, slider) * 12.0
+    return v ** 4.0
+
+def filter_cutoff_arc(bar: int) -> float:
+    """rlpf slider arc: 0.40 → 0.88 over ~128 bars, with two deliberate pullbacks.
+    Research: gradual opening with pullbacks at ~bar 32 and ~bar 77.
+    """
+    t = min(bar / 128.0, 1.0)
+    base = 0.40 + 0.48 * t
+    pb1 = 0.15 * math.exp(-((t - 0.25) ** 2) / 0.002)   # pullback ~bar 32
+    pb2 = 0.20 * math.exp(-((t - 0.60) ** 2) / 0.003)   # pullback ~bar 77
+    slider = max(0.30, min(0.90, base - pb1 - pb2))
+    return _rlpf_to_hz(slider)
+
+def fm_depth_arc(bar: int) -> float:
+    """FM depth: 0 for first ~96 bars, then ramps to 0.55 by bar 128.
+    Research: fm(slider(0)) early, opens to 0.606 after ~2/3 through session.
+    """
+    if bar < STAGE_BARS["fm_on"]:
+        return 0.0
+    t = min((bar - STAGE_BARS["fm_on"]) / 32.0, 1.0)
+    return t * 0.55
+
+def delay_wet_arc(bar: int) -> float:
+    """Lead delay wet: opens to wash ~bar 48, pulls back after ~bar 80.
+    Research: delay(0.585→0.773→1.0→0.438) documented in 3fpx7Scysw4.
+    """
+    if bar < STAGE_BARS["lead_melody_on"]:
+        return 0.55
+    elif bar < 48:
+        t = (bar - STAGE_BARS["lead_melody_on"]) / (48 - STAGE_BARS["lead_melody_on"])
+        return 0.55 + t * 0.25           # 0.55 → 0.80
+    elif bar < 72:
+        return 0.80                       # peak wash
+    else:
+        t = min((bar - 72) / 40.0, 1.0)
+        return max(0.50, 0.80 - t * 0.30) # 0.80 → 0.50
+
+def acidenv_arc(bar: int) -> float:
+    """AcidEnv brightness: 0.44 → 0.85 steadily over session.
+    Research: iu5rnQkfO6M 0.546→1.0; -pDO2RhcGhM 0.44→0.889.
+    """
+    t = min(bar / 128.0, 1.0)
+    return 0.44 + t * 0.41
 
 # ---------------------------------------------------------------------------
 # Synthesis parameters — all cited from research
@@ -306,12 +379,12 @@ def synthesise_supersaw(
     osc_phases: Optional[np.ndarray] = None,
     iir_state: Optional[np.ndarray] = None,
     fm_noise: Optional[np.ndarray] = None,
+    fm_depth: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Render n_samples of a supersaw note with per-sample filter and amp envelopes.
 
     Returns (buf_l, buf_r, updated_osc_phases, updated_iir_state).
-    osc_phases shape (SAW_COUNT,); iir_state shape (2,) = [L, R].
-    fm_noise: optional brown noise for FM modulation (shape n_samples).
+    fm_depth is the live arc value (0 early session → 0.55 late session).
     """
     if osc_phases is None:
         osc_phases = np.zeros(SAW_COUNT, dtype=np.float32)
@@ -334,13 +407,12 @@ def synthesise_supersaw(
     iir_L, iir_R = float(iir_state[0]), float(iir_state[1])
 
     for i in range(n_samples):
-        # FM: modulate each oscillator phase increment with brown noise
-        fm_mod = float(fm_noise[i]) * LEAD_FM_DEPTH if fm_noise is not None else 0.0
+        fm_mod = float(fm_noise[i]) * fm_depth * 0.02 if (fm_noise is not None and fm_depth > 0.0) else 0.0
 
         sample_l = 0.0
         sample_r = 0.0
         for v in range(SAW_COUNT):
-            delta = (freqs[v] * (1.0 + fm_mod * 0.02)) / SAMPLE_RATE
+            delta = (freqs[v] * (1.0 + fm_mod)) / SAMPLE_RATE
             osc_phases[v] = (osc_phases[v] + delta) % 1.0
             saw = 2.0 * osc_phases[v] - 1.0
             sample_l += pan_l[v] * saw
@@ -349,7 +421,6 @@ def synthesise_supersaw(
         sample_l /= SAW_COUNT
         sample_r /= SAW_COUNT
 
-        # Per-sample 2-pole IIR LPF (cascade two 1-poles for 12 dB/oct)
         cutoff = max(80.0, float(cutoff_env[i]))
         a = (2.0 * math.pi * cutoff) / (2.0 * math.pi * cutoff + SAMPLE_RATE)
         iir_L = iir_L + a * (sample_l - iir_L)
@@ -568,20 +639,18 @@ def drain_notes(notes: list[PrerenderedNote], n: int) -> tuple[np.ndarray, np.nd
 @dataclass
 class ArrangementState:
     step: int = 0
-    phase: str = "Intro"
-    phase_bar: int = 0
-    # Current voice gains (interpolate towards targets)
-    kick_gain:  float = 0.5
-    hihat_gain: float = 0.4
+    # Voice gains (ramped toward targets each step)
+    kick_gain:  float = 0.0
+    hihat_gain: float = 0.0
     clap_gain:  float = 0.0
-    pad_gain:   float = 0.8
+    pad_gain:   float = 0.0
     lead_gain:  float = 0.0
-    pulse_gain: float = 0.4
+    pulse_gain: float = 0.0
     # Sidechain
     sidechain_env: float = 1.0
     # Master volume
     master_vol: float = 0.0
-    # Pad oscillator state (sustained across steps for each voice note)
+    # Pad oscillator state (3 voices: root, root-14, root-21)
     pad_osc_phases: list = field(default_factory=lambda: [None, None, None])
     pad_iir_states: list = field(default_factory=lambda: [None, None, None])
     pad_current_notes: list = field(default_factory=lambda: [-1, -1, -1])
@@ -592,38 +661,36 @@ class ArrangementState:
     brown_seed: int = 0
 
 
-def advance_arrangement(state: ArrangementState, target_vol: float) -> None:
-    """Advance step counter, handle phase transitions, ramp gains."""
+def _stage_active(bar: int, key: str) -> bool:
+    return bar >= STAGE_BARS[key]
+
+
+def _target_gain(bar: int, voice: str) -> float:
+    """Return target gain for a voice at a given bar."""
+    if voice == "kick":
+        return 1.0 if _stage_active(bar, "kick_on") else 0.0
+    if voice == "hihat":
+        return 0.75 if _stage_active(bar, "hihat_on") else 0.0
+    if voice == "clap":
+        return 0.8 if _stage_active(bar, "clap_on") else 0.0
+    if voice == "pad":
+        return 1.0 if _stage_active(bar, "pad_on") else 0.0
+    if voice == "lead":
+        return 1.0 if _stage_active(bar, "lead_root_on") else 0.0
+    if voice == "pulse":
+        return 0.6 if _stage_active(bar, "pulse_on") else 0.0
+    return 0.0
+
+
+def advance_arrangement(state: ArrangementState, bar: int, target_vol: float) -> None:
     state.step += 1
-    step_in_bar = (state.step - 1) % STEPS_PER_BAR
-    bar = (state.step - 1) // STEPS_PER_BAR
 
-    if step_in_bar == 0 and state.step > STEPS_PER_BAR:
-        state.phase_bar += 1
-        phase_len = INTRO_BARS if state.phase == "Intro" else PHASE_BARS
-        if state.phase_bar >= phase_len:
-            idx = PHASE_SEQUENCE.index(state.phase)
-            next_idx = (idx + 1) % len(PHASE_SEQUENCE)
-            if next_idx == 0:
-                next_idx = 1
-            state.phase = PHASE_SEQUENCE[next_idx]
-            state.phase_bar = 0
-            # Silence beat before Drop
-            if state.phase == "Drop":
-                for v in ("kick", "hihat", "clap", "pad", "lead", "pulse"):
-                    setattr(state, f"{v}_gain", 0.0)
-
-    # Ramp voice gains toward phase targets
-    target = PHASE_GAINS[state.phase]
     for v in ("kick", "hihat", "clap", "pad", "lead", "pulse"):
         cur = getattr(state, f"{v}_gain")
-        tgt = target[v]
-        setattr(state, f"{v}_gain", cur + (tgt - cur) * 0.05)
+        tgt = _target_gain(bar, v)
+        setattr(state, f"{v}_gain", cur + (tgt - cur) * 0.04)
 
-    # Sidechain recovery
     state.sidechain_env = min(1.0, state.sidechain_env + 1.0 / SIDECHAIN_STEPS)
-
-    # Master volume ramp
     state.master_vol = min(target_vol, state.master_vol + target_vol / (STEPS_PER_BAR * 4))
 
 
@@ -702,15 +769,10 @@ def main() -> None:
     hihat_notes: list[PrerenderedNote] = []
     clap_notes:  list[PrerenderedNote] = []
 
-    # Pre-generate a kick and clap so they're ready
-    kick_l, kick_r = synthesise_kick()
-    clap_l, clap_r = synthesise_clap()
-
     rng = random.Random(args.seed)
-    noise_rng = np.random.default_rng(int(hashlib.md5(args.seed.encode()).hexdigest(), 16) & 0xFFFFFFFF)
 
     fade_out = False
-    fade_out_steps = PHASE_BARS * STEPS_PER_BAR
+    fade_out_steps = 32 * STEPS_PER_BAR
     nan_warned = False
 
     try:
@@ -728,26 +790,44 @@ def main() -> None:
                 fade_out = True
 
             if fade_out:
-                state.master_vol -= args.volume / (fade_out_steps)
+                state.master_vol -= args.volume / fade_out_steps
                 if state.master_vol <= 0.0:
                     state.master_vol = 0.0
                     if not wav_mode:
                         stream.write(np.zeros((samples_per_step, 2), dtype=np.float32))
                     break
             else:
-                advance_arrangement(state, args.volume)
+                advance_arrangement(state, bar, args.volume)
 
             # ----------------------------------------------------------------
-            # Current chord
+            # Stage flags and arc values for this bar
             # ----------------------------------------------------------------
-            chord = chord_for_bar(bar)   # [root, third, fifth] MIDI notes
+            pad_chord_active  = _stage_active(bar, "pad_chord_on")
+            lead_melody_active = _stage_active(bar, "lead_melody_on")
+            lead_voicing_active = _stage_active(bar, "lead_voicing_on")
+            kick_steps = KICK_STEPS_SYNCOPATED if _stage_active(bar, "kick_syncopated") else KICK_STEPS_SIMPLE
+
+            live_cutoff   = filter_cutoff_arc(bar)
+            live_fm_depth = fm_depth_arc(bar)
+            live_delay_wet = delay_wet_arc(bar)
+            live_acidenv  = acidenv_arc(bar)
 
             # ----------------------------------------------------------------
-            # Kick — steps {0,4,8,11,14}
+            # Chord / scale
+            # ----------------------------------------------------------------
+            pad_degree = pad_root_degree(bar, pad_chord_active)
+            pad_root_midi = scale_degree_to_midi(pad_degree)
+            pad_notes_midi = [pad_root_midi, pad_root_midi - 14, pad_root_midi - 21]
+
+            voicing_shift = lead_voicing_semitones(bar, lead_voicing_active)
+            chord = chord_for_bar(bar)   # [root, third, fifth]
+
+            # ----------------------------------------------------------------
+            # Kick
             # ----------------------------------------------------------------
             kick_l_step = np.zeros(samples_per_step, dtype=np.float32)
             kick_r_step = np.zeros(samples_per_step, dtype=np.float32)
-            if step_in_bar in KICK_STEPS and state.kick_gain > 0.01:
+            if step_in_bar in kick_steps and state.kick_gain > 0.01:
                 kl, kr = synthesise_kick()
                 kick_notes.append(PrerenderedNote(kl, kr))
                 if state.sidechain_env > SIDECHAIN_DEPTH:
@@ -758,16 +838,18 @@ def main() -> None:
             kick_r_step = kr * state.kick_gain * KICK_LEVEL
 
             # ----------------------------------------------------------------
-            # Hi-hat — every step, variable decay
+            # Hi-hat — every step once hihat_on stage active
             # ----------------------------------------------------------------
-            decay = hihat_decay(step_in_bar, bar)
-            hl, hr = synthesise_hihat(decay)
-            hihat_notes.append(PrerenderedNote(hl, hr))
+            hihat_l_step = np.zeros(samples_per_step, dtype=np.float32)
+            hihat_r_step = np.zeros(samples_per_step, dtype=np.float32)
+            if state.hihat_gain > 0.01:
+                decay = hihat_decay(step_in_bar, bar)
+                hl, hr = synthesise_hihat(decay)
+                hihat_notes.append(PrerenderedNote(hl, hr))
             hml, hmr = drain_notes(hihat_notes, samples_per_step)
-            # Slight stereo panning — alternates left/right
-            pan = 0.7 if step_in_bar % 2 == 0 else 0.3
-            hihat_l_step = hml * state.hihat_gain * HIHAT_LEVEL * pan
-            hihat_r_step = hmr * state.hihat_gain * HIHAT_LEVEL * (1.0 - pan)
+            pan_hh = 0.7 if step_in_bar % 2 == 0 else 0.3
+            hihat_l_step = hml * state.hihat_gain * HIHAT_LEVEL * pan_hh
+            hihat_r_step = hmr * state.hihat_gain * HIHAT_LEVEL * (1.0 - pan_hh)
 
             # ----------------------------------------------------------------
             # Clap — backbeat
@@ -780,29 +862,20 @@ def main() -> None:
             clap_r_step = cmr * state.clap_gain * CLAP_LEVEL
 
             # ----------------------------------------------------------------
-            # Pad — retrigger every step (seg 16) with acidenv + trancegate
-            # Research: .seg(16) = retrigger every 16th note.
-            # Voices: chord root + add("-14,-21") spread.
+            # Pad — seg 16 retrigger, acidenv, trancegate, live filter arc
+            # Before pad_chord_on: single root.  After: cycling chord degrees.
             # ----------------------------------------------------------------
             pad_l_step = np.zeros(samples_per_step, dtype=np.float32)
             pad_r_step = np.zeros(samples_per_step, dtype=np.float32)
 
             if state.pad_gain > 0.01:
-                # Pad note = chord root + pad voicing offsets
-                pad_root = chord[0]   # chord root MIDI
-                pad_notes = [pad_root, pad_root - 14, pad_root - 21]
-
-                # (Re)init oscillator state when chord changes
-                if step_in_bar == 0 and bar % CHORD_BARS == 0:
+                if step_in_bar == 0:
                     state.pad_osc_phases = [None, None, None]
                     state.pad_iir_states = [None, None, None]
-                    state.pad_current_notes = list(pad_notes)
+                    state.pad_current_notes = list(pad_notes_midi)
 
-                # Retrigger envelope and filter envelope every step (seg 16)
-                amp_env = acidenv(samples_per_step, amount=0.55)
-                cut_env = lpenv(samples_per_step, PAD_CUTOFF_BASE)
-
-                # Trancegate applied after render
+                amp_env = acidenv(samples_per_step, amount=live_acidenv)
+                cut_env = lpenv(samples_per_step, live_cutoff)
                 gate_env = trancegate_envelope(step_in_bar, samples_per_step)
 
                 for vi, note in enumerate(state.pad_current_notes):
@@ -818,76 +891,69 @@ def main() -> None:
                     pad_l_step += bl
                     pad_r_step += br
 
-                # Apply trancegate and sidechain
                 pad_l_step *= gate_env * state.sidechain_env
                 pad_r_step *= gate_env * state.sidechain_env
-
-                # Reverb
                 pad_l_step = pad_reverb_l.process(pad_l_step, wet=0.25)
                 pad_r_step = pad_reverb_r.process(pad_r_step, wet=0.25)
-
                 pad_l_step *= state.pad_gain * PAD_LEVEL
                 pad_r_step *= state.pad_gain * PAD_LEVEL
 
             # ----------------------------------------------------------------
-            # Lead — notearp pattern, acidenv, FM brown noise, heavy delay
-            # Research: notearp("< <- - - -> 0 1@2 0 1 0 1>*16"),
-            #           .fm(.5).fmwave("brown"), .delay(.7).delayfeedback(.8)
+            # Lead — single root before lead_melody_on, notearp after.
+            # Voicing shift applied after lead_voicing_on.
+            # FM depth, filter cutoff, delay wet all follow live arcs.
             # ----------------------------------------------------------------
             lead_l_step = np.zeros(samples_per_step, dtype=np.float32)
             lead_r_step = np.zeros(samples_per_step, dtype=np.float32)
 
             if state.lead_gain > 0.01:
-                arp_tone_idx = NOTEARP[step_in_bar]
+                if not lead_melody_active:
+                    # Stage 3: single root note, held — retrigger every bar
+                    fire_note = step_in_bar == 0
+                    arp_tone_idx = 0 if fire_note else -1
+                else:
+                    arp_tone_idx = NOTEARP[step_in_bar]
 
                 if arp_tone_idx >= 0:
-                    note = chord[min(arp_tone_idx, len(chord) - 1)]
-                    # Brown noise FM buffer for this note
-                    fm_buf = _brown_noise(samples_per_step, seed=state.brown_seed)
+                    base_note = chord[min(arp_tone_idx, len(chord) - 1)]
+                    note = base_note + voicing_shift
+                    note = max(48, min(96, note))   # clamp to sane range
+
+                    fm_buf = _brown_noise(samples_per_step, seed=state.brown_seed) if live_fm_depth > 0.0 else None
                     state.brown_seed = (state.brown_seed + 1) % 65536
 
-                    # Reset oscillator and filter state on each note trigger
                     state.lead_osc_phases = np.zeros(SAW_COUNT, dtype=np.float32)
                     state.lead_iir_state  = np.zeros(2, dtype=np.float32)
 
-                    amp_env = acidenv(samples_per_step, amount=0.60)
-                    cut_env = lpenv(samples_per_step, LEAD_CUTOFF_BASE)
+                    amp_env = acidenv(samples_per_step, amount=live_acidenv)
+                    cut_env = lpenv(samples_per_step, live_cutoff)
 
                     bl, br, new_phases, new_iir = synthesise_supersaw(
                         note, samples_per_step, cut_env, amp_env,
                         osc_phases=state.lead_osc_phases,
                         iir_state=state.lead_iir_state,
                         fm_noise=fm_buf,
+                        fm_depth=live_fm_depth,
                     )
                     state.lead_osc_phases = new_phases
                     state.lead_iir_state  = new_iir
-
                     lead_l_step = bl
                     lead_r_step = br
-
                     midi.addNote(0, 0, note, beat_time, STEP_BEATS, 75)
-                else:
-                    # No new note — render silence (delay will fill it)
-                    pass
 
-                # Apply feedback delay (heavy wet)
-                lead_l_step, lead_r_step = lead_delay.process(lead_l_step, lead_r_step)
-
-                # Sidechain
+                lead_l_step, lead_r_step = lead_delay.process(
+                    lead_l_step, lead_r_step,
+                    wet=live_delay_wet, feedback=LEAD_DELAY_FEEDBACK,
+                )
                 lead_l_step *= state.sidechain_env
                 lead_r_step *= state.sidechain_env
-
-                # Reverb (lighter on lead — delay already adds space)
-                _lw = 0.30 if state.phase == "Breakdown" else 0.12
-                lead_l_step = lead_reverb_l.process(lead_l_step, wet=_lw)
-                lead_r_step = lead_reverb_r.process(lead_r_step, wet=_lw)
-
+                lead_l_step = lead_reverb_l.process(lead_l_step, wet=0.12)
+                lead_r_step = lead_reverb_r.process(lead_r_step, wet=0.12)
                 lead_l_step *= state.lead_gain * LEAD_LEVEL
                 lead_r_step *= state.lead_gain * LEAD_LEVEL
 
             # ----------------------------------------------------------------
-            # Pulse texture — every step, FM-modulated
-            # Research: s("pulse!16").dec(.1).fm(time).fmh(time)
+            # Pulse texture
             # ----------------------------------------------------------------
             pulse_l_step = np.zeros(samples_per_step, dtype=np.float32)
             pulse_r_step = np.zeros(samples_per_step, dtype=np.float32)
@@ -909,7 +975,6 @@ def main() -> None:
             ]
             mix_l, mix_r = mix_and_limit(voices, state.master_vol)
 
-            # NaN guard
             if not (np.isfinite(mix_l).all() and np.isfinite(mix_r).all()):
                 if not nan_warned:
                     logger.warning("NaN/Inf in audio buffer — silencing")
@@ -925,14 +990,13 @@ def main() -> None:
             else:
                 stream.write(np.column_stack([mix_l, mix_r]))
 
-            # Terminal line
-            if step_in_bar == 0:
-                chord_name = ["Gm", "Cm", "A#", "Dm"][(bar // CHORD_BARS) % 4]
+            if step_in_bar == 0 and not fade_out:
+                cutoff_k = live_cutoff / 1000.0
+                n_active = sum(1 for v in STAGE_BARS.values() if bar >= v)
                 print(
-                    f"[v2] [Bar {bar+1:4d}] [{state.phase[:4]}] [{chord_name}]"
-                    f"  K:{state.kick_gain:.2f} H:{state.hihat_gain:.2f}"
-                    f" P:{state.pad_gain:.2f} L:{state.lead_gain:.2f}"
-                    f"  vol={state.master_vol:.2f}"
+                    f"[v2] bar={bar+1:4d}  stages={n_active}/11"
+                    f"  K:{state.kick_gain:.2f} P:{state.pad_gain:.2f} L:{state.lead_gain:.2f}"
+                    f"  filt={cutoff_k:.1f}kHz fm={live_fm_depth:.2f} dly={live_delay_wet:.2f}"
                 )
 
         if wav_mode:
