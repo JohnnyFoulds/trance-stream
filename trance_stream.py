@@ -55,7 +55,7 @@ parser.add_argument(
 parser.add_argument(
     "-v", "--volume",
     type=float,
-    default=0.60,
+    default=0.90,
     help="Master volume (0.0-1.0)",
 )
 parser.add_argument(
@@ -135,11 +135,11 @@ DETUNE_CENTS_BASS: float = 8.0
 DETUNE_CENTS_PAD: float = 20.0
 
 # Per-voice level trims (applied at note creation; tune by ear)
-KICK_LEVEL: float = 0.90   # kick is the anchor — sits loud and forward
-BASS_LEVEL: float = 0.12   # rolling 16ths; present under kick, not dominant
-LEAD_LEVEL: float = 0.50   # 3-voice stack; prominent melodic presence
-ARP_LEVEL:  float = 0.20   # high-register arp; behind lead
-PAD_LEVEL:  float = 0.15   # background texture; behind everything
+KICK_LEVEL: float = 1.00   # kick is the anchor
+BASS_LEVEL: float = 0.80   # rolling 16ths
+LEAD_LEVEL: float = 3.00   # 3-voice stack (÷3 per voice = 1.00 each)
+ARP_LEVEL:  float = 1.20   # high-register arp
+PAD_LEVEL:  float = 0.90   # background texture
 
 # Kick synthesis (starter values; tune by ear)
 KICK_F0: float = 160.0    # Hz, sweep start
@@ -175,7 +175,7 @@ PAD_CUTOFF_SWEEP: float = 300.0
 PAD_LFO_RATE: float = 0.05
 
 # Soft-clip drive (tune by ear)
-DRIVE: float = 0.8   # light saturation; was 1.5 which crushed kick transients
+DRIVE: float = 3.0   # soft-clip limiter — limits peaks to near 0 dBFS
 
 # CA bit positions (spread across 32-wide row)
 LEAD_GATE: int = 5
@@ -1262,12 +1262,11 @@ def mix_and_limit(
         mix_l += buf_l
         mix_r += buf_r
 
-    # Soft clip via tanh
-    mix_l = np.tanh(mix_l * DRIVE) / DRIVE
-    mix_r = np.tanh(mix_r * DRIVE) / DRIVE
+    # Scale then soft-clip. tanh(x*DRIVE) keeps peak ≤ 1.0 regardless of DRIVE.
+    mix_l = np.tanh(mix_l * master_vol * DRIVE)
+    mix_r = np.tanh(mix_r * master_vol * DRIVE)
 
-    return (mix_l * master_vol).astype(np.float32), \
-           (mix_r * master_vol).astype(np.float32)
+    return mix_l.astype(np.float32), mix_r.astype(np.float32)
 
 
 # --- VELOCITY MODEL ---
