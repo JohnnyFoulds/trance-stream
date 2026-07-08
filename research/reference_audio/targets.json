@@ -1,0 +1,111 @@
+{
+  "3fpx7Scysw4": {
+    "mean_centroid_hz": 555.4,
+    "brightness_score": 0.0235,
+    "band_energy_db": {
+      "sub": -1.5,
+      "bass": 0.0,
+      "mid": -11.9,
+      "hi-mid": -28.0,
+      "air": -39.4
+    },
+    "band_energy_raw": {
+      "sub": 54.361125,
+      "bass": 64.495067,
+      "mid": 16.477238,
+      "hi-mid": 2.569914,
+      "air": 0.692948
+    },
+    "duration_s": 90.0,
+    "sample_rate": 44100
+  },
+  "-pDO2RhcGhM": {
+    "mean_centroid_hz": 624.4,
+    "brightness_score": 0.0291,
+    "band_energy_db": {
+      "sub": 0.0,
+      "bass": -3.0,
+      "mid": -9.8,
+      "hi-mid": -26.0,
+      "air": -39.4
+    },
+    "band_energy_raw": {
+      "sub": 45.286142,
+      "bass": 32.213561,
+      "mid": 14.738617,
+      "hi-mid": 2.276375,
+      "air": 0.484961
+    },
+    "duration_s": 90.0,
+    "sample_rate": 44100
+  },
+  "GWXCCBsOMSg": {
+    "mean_centroid_hz": 425.3,
+    "brightness_score": 0.023,
+    "band_energy_db": {
+      "sub": 0.0,
+      "bass": -7.2,
+      "mid": -18.4,
+      "hi-mid": -29.7,
+      "air": -48.3
+    },
+    "band_energy_raw": {
+      "sub": 141.909591,
+      "bass": 61.902551,
+      "mid": 16.990659,
+      "hi-mid": 4.655035,
+      "air": 0.543222
+    },
+    "duration_s": 90.0,
+    "sample_rate": 44100
+  },
+  "iu5rnQkfO6M": {
+    "mean_centroid_hz": 928.6,
+    "brightness_score": 0.0484,
+    "band_energy_db": {
+      "sub": -3.4,
+      "bass": 0.0,
+      "mid": -11.9,
+      "hi-mid": -22.2,
+      "air": -33.5
+    },
+    "band_energy_raw": {
+      "sub": 42.786576,
+      "bass": 63.177971,
+      "mid": 16.10386,
+      "hi-mid": 4.877918,
+      "air": 1.334179
+    },
+    "duration_s": 90.0,
+    "sample_rate": 44100
+  },
+  "vn9VDbacUgQ": {
+    "mean_centroid_hz": 558.6,
+    "brightness_score": 0.0307,
+    "band_energy_db": {
+      "sub": 0.0,
+      "bass": -7.8,
+      "mid": -17.4,
+      "hi-mid": -27.8,
+      "air": -41.9
+    },
+    "band_energy_raw": {
+      "sub": 121.001641,
+      "bass": 49.086022,
+      "mid": 16.271506,
+      "hi-mid": 4.922165,
+      "air": 0.976853
+    },
+    "duration_s": 90.0,
+    "sample_rate": 44100
+  },
+  "_aggregate": {
+    "note": "Cross-video averages \u2014 use these as integration test thresholds",
+    "mean_centroid_hz_avg": 618.5,
+    "mean_centroid_hz_min": 425.3,
+    "mean_centroid_hz_max": 928.6,
+    "brightness_score_avg": 0.0309,
+    "brightness_score_min": 0.023,
+    "brightness_score_max": 0.0484
+  }
+}

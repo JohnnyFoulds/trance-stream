@@ -1,0 +1,5 @@
+# ML-based audio analysis tools (large downloads, separate from dev)
+# First pip install downloads ~2GB PyTorch; Demucs model ~1GB on first run
+# basic-pitch model ~50MB on first run
+demucs>=4.0.0
+basic-pitch>=0.3.0

@@ -1,11 +1,23 @@
 __pycache__/
 *.pyc
 *.pyo
-*.wav
-*.mid
 .DS_Store
+
+# Generated audio output — not committed
+/tmp/*.wav
+/tmp/*.mid
 
 # Research: raw video files are large — not committed
 # Extracted text (code.jsonl, summary.md) and analysis ARE committed
 research/videos/
 research/extracted/*/raw_frames/
+
+# Reference audio: WAV clips and pad samples ARE committed (ground truth)
+# Stems are excluded (large, re-derivable with tools/reverse_engineer.py)
+research/reference_audio/stems/*/
+
+# Video files
+*.webm
+
+# Virtual environment
+.venv/
