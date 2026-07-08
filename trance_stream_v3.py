@@ -15,6 +15,8 @@ Usage::
     python trance_stream_v3.py --seed sunrise --mood uplifting --bars 128
     python trance_stream_v3.py --seed forest --mood dark --bpm 138 --wav /tmp/out.wav
     python trance_stream_v3.py --bars 32 --out-midi /tmp/out.mid
+    python trance_stream_v3.py --stream               # real-time bar-by-bar playback
+    python trance_stream_v3.py --stream --wav /tmp/out.wav  # stream and save simultaneously
     python trance_stream_v3.py --analyse     # run spectral analysis on the output
     python trance_stream_v3.py --spectrogram # generate spectrogram PNG
 
@@ -57,6 +59,9 @@ def main():
                         help="Generate spectrogram PNG after rendering")
     parser.add_argument("--play",    action="store_true",
                         help="Play back the WAV after rendering (requires sounddevice)")
+    parser.add_argument("--stream",  action="store_true",
+                        help="Real-time bar-by-bar playback — render and play simultaneously "
+                             "(requires sounddevice). Ctrl-C to stop.")
     args = parser.parse_args()
 
     print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
@@ -74,26 +79,29 @@ def main():
     print(f"  stage bars: " +
           "  ".join(f"{k}={v}" for k, v in list(song.stage_bars.items())[:6]))
 
-    # Render
-    print(f"Rendering {args.bars} bars...")
+    # Render (or stream)
     from song.renderer import SongRenderer
     renderer = SongRenderer(song)
-    buf_l, buf_r = renderer.render_bars(args.bars)
 
-    # Apply master volume
-    if args.volume != 1.0:
-        buf_l *= args.volume
-        buf_r *= args.volume
+    if args.stream:
+        buf_l, buf_r = _stream_bars(renderer, args.bars, args.volume, args.wav)
+    else:
+        print(f"Rendering {args.bars} bars...")
+        buf_l, buf_r = renderer.render_bars(args.bars)
 
-    elapsed = time.time() - t0
-    dur_s   = len(buf_l) / song.sr
-    print(f"  Rendered {dur_s:.1f}s of audio in {elapsed:.1f}s "
-          f"({dur_s/elapsed:.1f}× realtime)")
-    print(f"  Peak level: {max(abs(buf_l).max(), abs(buf_r).max()):.4f}")
+        if args.volume != 1.0:
+            buf_l *= args.volume
+            buf_r *= args.volume
 
-    # Write WAV
-    print(f"Writing WAV → {args.wav}")
-    renderer.write_wav(args.wav)
+        elapsed = time.time() - t0
+        dur_s   = len(buf_l) / song.sr
+        print(f"  Rendered {dur_s:.1f}s of audio in {elapsed:.1f}s "
+              f"({dur_s/elapsed:.1f}× realtime)")
+        print(f"  Peak level: {max(abs(buf_l).max(), abs(buf_r).max()):.4f}")
+
+        # Write WAV (stream mode writes bar-by-bar, so skip here)
+        print(f"Writing WAV → {args.wav}")
+        renderer.write_wav(args.wav)  # no-op check: only reached when not streaming
 
     # Write MIDI
     print(f"Writing MIDI → {args.out_midi}")
@@ -161,8 +169,8 @@ def main():
         except Exception as e:
             print(f"  Spectrogram failed: {e}")
 
-    # Optional playback
-    if args.play:
+    # Optional post-render playback (--play, not --stream)
+    if args.play and not args.stream:
         print("\nPlaying back...")
         try:
             import sounddevice as sd
@@ -176,6 +184,96 @@ def main():
             print(f"  Playback failed: {e}")
 
     print("\nDone.")
+
+
+def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
+                 wav_path: str | None) -> tuple:
+    """Render and play back bar-by-bar in real time.
+
+    Each bar is rendered (~0.28s at 6× realtime) then written to the audio
+    device (1.71s playback at 140 BPM).  The render of bar N+1 happens while
+    bar N is playing, so there is ~1.4s of headroom before underrun.
+
+    If wav_path is given, all bars are also written to a WAV file.
+
+    Returns (buf_l, buf_r) of the full accumulated audio.
+    """
+    import numpy as np
+    import wave as _wave
+
+    try:
+        import sounddevice as sd
+    except ImportError:
+        print("sounddevice not installed: pip install sounddevice")
+        print("Falling back to render-then-play.")
+        buf_l, buf_r = renderer.render_bars(n_bars)
+        if volume != 1.0:
+            buf_l *= volume
+            buf_r *= volume
+        return buf_l, buf_r
+
+    sr  = renderer.song.sr
+    spb = renderer._spb
+
+    all_l: list[np.ndarray] = []
+    all_r: list[np.ndarray] = []
+
+    wav_file = None
+    if wav_path:
+        wav_file = _wave.open(wav_path, 'wb')
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sr)
+
+    stream = sd.OutputStream(samplerate=sr, channels=2, dtype='float32',
+                              blocksize=spb)
+    stream.start()
+    print(f"Streaming {n_bars} bars in real time — Ctrl-C to stop.")
+
+    try:
+        for bar_idx in range(n_bars):
+            t_render_start = time.time()
+            bar_l, bar_r = renderer._render_bar()
+
+            if volume != 1.0:
+                bar_l = bar_l * volume
+                bar_r = bar_r * volume
+
+            render_ms = (time.time() - t_render_start) * 1000
+            bar_dur_ms = spb / sr * 1000
+            print(f"  bar {bar_idx + 1:4d}/{n_bars}  render={render_ms:.0f}ms  "
+                  f"budget={bar_dur_ms:.0f}ms  "
+                  f"headroom={bar_dur_ms - render_ms:.0f}ms",
+                  end='\r')
+
+            stereo = np.column_stack([bar_l, bar_r])
+            stream.write(stereo)
+
+            all_l.append(bar_l)
+            all_r.append(bar_r)
+
+            if wav_file is not None:
+                pcm = (np.clip(stereo, -1, 1) * 32767).astype(np.int16)
+                wav_file.writeframes(pcm.tobytes())
+
+    except KeyboardInterrupt:
+        print(f"\nStopped at bar {len(all_l)}.")
+    finally:
+        stream.stop()
+        stream.close()
+        if wav_file is not None:
+            wav_file.close()
+            print(f"\nWAV saved → {wav_path}")
+
+    print()
+    if not all_l:
+        return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=np.float32)
+
+    buf_l = np.concatenate(all_l)
+    buf_r = np.concatenate(all_r)
+    renderer._audio_l = all_l
+    renderer._audio_r = all_r
+    return buf_l, buf_r
 
 
 def _midi_name(n: int) -> str:
