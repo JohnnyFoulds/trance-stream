@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+*.wav
+*.mid
+.DS_Store
