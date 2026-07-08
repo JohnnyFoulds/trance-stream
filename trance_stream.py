@@ -132,7 +132,7 @@ SAW_COUNT_BASS: int = 3
 SAW_COUNT_PAD: int = 7
 DETUNE_CENTS_LEAD: float = 120.0   # ~20 cents per pair across 7 saws — wide chorus
 DETUNE_CENTS_BASS: float = 8.0
-DETUNE_CENTS_PAD: float = 20.0
+DETUNE_CENTS_PAD: float = 50.0
 
 # Per-voice level trims (applied at note creation; tune by ear)
 KICK_LEVEL: float = 1.00   # kick is the anchor
@@ -754,25 +754,24 @@ def select_lead_note(
     if not pool:
         return None
 
-    # Build a phrase contour as index offsets into the pool.
-    # Contour length = 4 bars; the CA bit determines shape variant (0 or 1).
-    # Shape is re-derived each time but stays consistent within a chord block
-    # because chord + CA are stable for 4 bars.
-    phrase_bar = state.bar_note_count % 4   # 0-3 within the phrase
+    # Phrase position: which of the 4 bars in the current phrase are we on?
+    # bar_note_count is reset every bar, so we derive from the global step counter.
+    phrase_bar = (state.step // STEPS_PER_BAR) % 4
     ca_variant = state.ca_row[PHRASE_BIT]
 
-    # Two contour shapes (index offsets into the pool, relative to mid):
-    # Shape 0: rise then fall  — classic trance arch phrase
-    # Shape 1: fall then rise  — inverted arch
-    mid = len(pool) // 2
-    if ca_variant == 0:
-        # e.g. mid, mid+1, mid+2, mid+1
-        offsets = [0, 1, 2, 1]
+    # Anchor: nearest pool note to previous pitch (voice-leading across chords)
+    if state.prev_lead_note is not None:
+        anchor = min(range(len(pool)), key=lambda i: abs(pool[i] - state.prev_lead_note))
     else:
-        # e.g. mid, mid-1, mid+1, mid
-        offsets = [0, -1, 1, 0]
+        anchor = len(pool) // 2
 
-    idx = max(0, min(len(pool) - 1, mid + offsets[phrase_bar]))
+    # Within a 4-bar phrase apply a gentle contour (±1 step in pool)
+    if ca_variant == 0:
+        offsets = [0, 1, 1, 0]    # slight rise then return
+    else:
+        offsets = [0, 0, -1, 0]   # slight dip on bar 3
+
+    idx = max(0, min(len(pool) - 1, anchor + offsets[phrase_bar]))
     note = pool[idx]
 
     _update_lead_state(state, note, state.prev_lead_note)
@@ -981,18 +980,22 @@ def render_supersaw_step(
     raw_l = (pan_l[:, None] * saw).sum(axis=0) / saw_count  # (N,)
     raw_r = (pan_r[:, None] * saw).sum(axis=0) / saw_count  # (N,)
 
-    # First-order IIR LPF — Python loop required to carry filter state
+    # Two-pole IIR LPF (cascade two one-poles → 12 dB/oct).
     a = (2.0 * math.pi * cutoff_hz) / (
         2.0 * math.pi * cutoff_hz + SAMPLE_RATE
     )
     one_minus_a = 1.0 - a
     buf_l = np.empty(samples_per_step, dtype=np.float32)
     buf_r = np.empty(samples_per_step, dtype=np.float32)
+    iir_L2: float = 0.0
+    iir_R2: float = 0.0
     for i in range(samples_per_step):
         iir_L = one_minus_a * iir_L + a * float(raw_l[i])
         iir_R = one_minus_a * iir_R + a * float(raw_r[i])
-        buf_l[i] = iir_L * gain
-        buf_r[i] = iir_R * gain
+        iir_L2 = one_minus_a * iir_L2 + a * iir_L
+        iir_R2 = one_minus_a * iir_R2 + a * iir_R
+        buf_l[i] = iir_L2 * gain
+        buf_r[i] = iir_R2 * gain
 
     return buf_l, buf_r, osc_phases, iir_L, iir_R
 
@@ -1104,18 +1107,25 @@ def synthesise_snare(
 # --- SYNTHESIS: TRANCE GATE ---
 
 def tgate_pattern(seed: int, length: int = 16) -> list[int]:
-    """Generate a binary gate pattern from an integer seed using a 16-bit LFSR.
+    """Generate a trance gate pattern with ~75% density.
 
-    :param seed: Integer seed (entry from ``TGATE_SEEDS``).
+    Beat positions (0, 4, 8, 12) are always open so the rhythmic pulse lands on
+    the four-on-floor beats.  Off-beat positions are open with ~75% probability,
+    seeded deterministically for repeatability.  This matches Switch Angel's
+    ``rand.mul(1.5).round()`` gate which produces ~75% density with syncopated
+    variation rather than the 50% density of a plain LFSR.
+
+    :param seed: Integer seed for deterministic variation.
     :param length: Pattern length in steps (default 16).
     :returns: List of 0/1 integers of length ``length``.
     """
-    state = seed % (2 ** 16)
+    rng = random.Random(seed)
     pattern: list[int] = []
-    for _ in range(length):
-        bit = (state ^ (state >> 1)) & 1
-        pattern.append(bit)
-        state = (state >> 1) | (bit << 15)
+    for i in range(length):
+        if i % 4 == 0:
+            pattern.append(1)   # always open on beat positions
+        else:
+            pattern.append(1 if rng.random() < 0.75 else 0)
     return pattern
 
 
