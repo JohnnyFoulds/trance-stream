@@ -1,6 +1,6 @@
 # Diagnostic Tools
 
-Three scripts for understanding what `trance_stream.py` is actually producing and
+Four scripts for understanding what `trance_stream.py` is actually producing and
 how it compares against a reference track.  They work on the WAV and MIDI files
 that `trance_stream.py` writes with `--wav` and `--out_midi`, so you never need a
 running audio stream to diagnose a problem.
@@ -13,13 +13,16 @@ running audio stream to diagnose a problem.
 # 1. Render a fixed-length clip offline (fast, no audio hardware needed)
 python trance_stream.py --bars 32 --wav /tmp/out.wav -o /tmp/out.mid -s center -m uplifting
 
-# 2. Get the high-level audio + MIDI report
+# 2. Run the composite health check (7 pass/fail metrics — start here)
+python tools/health_check.py /tmp/out.wav
+
+# 3. Get the detailed audio + MIDI report
 python tools/analyse_audio.py /tmp/out.wav /tmp/out.mid --seed center --mood uplifting
 
-# 3. Drill into specific bars to see exact notes
+# 4. Drill into specific bars to see exact notes
 python tools/midi_forensic.py /tmp/out.mid --seed center --bars 20 --voice lead
 
-# 4. Compare spectrograms with a reference track (requires librosa)
+# 5. Compare spectrograms with a reference track (requires librosa)
 python tools/spectrogram.py /tmp/switch_angel_ref.wav --out /tmp/ref_spec.png --title "Reference"
 python tools/spectrogram.py /tmp/out.wav --out /tmp/gen_spec.png --title "Generated"
 open /tmp/ref_spec.png /tmp/gen_spec.png
@@ -188,6 +191,67 @@ Arguments:
 
 ```
 pip install numpy matplotlib librosa
+```
+
+---
+
+## `health_check.py`
+
+**What it does:** Runs 7 (optionally 8) pass/fail checks derived from
+`docs/trance-reference.md` Section 4, and prints a summary table.  Start here
+when evaluating a new render — it gives a single objective score and flags which
+dimension needs attention.
+
+### Checks
+
+| Check | Target | What it catches |
+|---|---|---|
+| BPM | ~140 (±5) | Clock drift if BPM ever changes |
+| Beat autocorr | > 0.40 | Missing or irregular kick pattern |
+| Centroid mean | 800–3500 Hz | Mix too dark or too harsh |
+| Centroid std (LFO) | > 200 Hz | Filter LFO not audible |
+| LFO rate | 0.01–0.50 Hz | LFO too fast or too slow |
+| Chroma entropy | 1.5–3.5 | Melody stuck on one or two notes |
+| Band balance | bass ≥ −6 dB, hi-mid ≤ −10 dB | Imbalanced mix |
+| MFCC similarity | > 0.70 | Timbre distance from reference WAV |
+
+### Example output
+
+```
+Health check: /tmp/trance_out.wav
+
+  Duration: 61.6 s  (22050 Hz mono)
+
+============================================================
+CHECK                   STATUS  DETAIL
+------------------------------------------------------------
+  BPM                   PASS  143.6  (target: ~140, librosa ±5)
+  Beat autocorr         PASS  0.511  (target: >0.40)
+  Centroid mean         PASS  1807 Hz  (target: 800–3500 Hz)
+  Centroid std (LFO)    PASS  1269 Hz  (target: >200 Hz)
+  LFO rate              PASS  0.016 Hz  (target: 0.01–0.50 Hz)
+  Chroma entropy        PASS  3.43  (target: 1.5–3.5)
+  Band balance          PASS  sub: -7.8dB  bass: +0.0dB  mid: -9.2dB  hi-mid: -21.6dB
+  MFCC similarity       FAIL  0.3238  (target: >0.70)
+============================================================
+
+  7/8 checks passed  (0 skipped)
+```
+
+### Usage
+
+```
+python tools/health_check.py [WAV_PATH] [--ref REF_WAV]
+
+Arguments:
+  WAV_PATH   Path to WAV file             (default: /tmp/trance_out.wav)
+  --ref      Reference WAV for MFCC test  (default: /tmp/switch_angel_ref.wav)
+```
+
+### Dependencies
+
+```
+pip install librosa scipy numpy
 ```
 
 ---

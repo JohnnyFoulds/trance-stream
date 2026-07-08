@@ -184,15 +184,15 @@ ARP_DIR_BIT: int = 23
 # Phase target voice gains
 PHASE_TARGET_GAINS: dict[str, dict[str, float]] = {
     "Intro":     {"kick": 0.4, "bass": 0.0, "lead": 0.0,
-                  "arp": 0.7, "pad": 0.6},
+                  "arp": 0.7, "pad": 0.6, "snare": 0.0},
     "Groove":    {"kick": 1.0, "bass": 1.0, "lead": 1.0,
-                  "arp": 0.0, "pad": 1.0},
+                  "arp": 0.0, "pad": 1.0, "snare": 0.0},
     "Breakdown": {"kick": 0.0, "bass": 0.0, "lead": 0.7,
-                  "arp": 1.0, "pad": 1.0},
+                  "arp": 1.0, "pad": 1.0, "snare": 0.0},
     "Buildup":   {"kick": 0.5, "bass": 0.0, "lead": 0.0,
-                  "arp": 1.0, "pad": 1.0},
+                  "arp": 1.0, "pad": 1.0, "snare": 1.0},
     "Drop":      {"kick": 1.0, "bass": 1.0, "lead": 1.0,
-                  "arp": 0.0, "pad": 1.0},
+                  "arp": 0.0, "pad": 1.0, "snare": 0.0},
 }
 PHASE_SEQUENCE: list[str] = [
     "Intro", "Groove", "Breakdown", "Buildup", "Drop",
@@ -523,6 +523,7 @@ class EngineState:
     lead_gain: float
     arp_gain: float
     pad_gain: float
+    snare_gain: float
     sidechain_env: float         # 0.0-1.0; multiplied onto bass/pad
     lead_lfo_phase: float        # 0.0-1.0
     bass_lfo_phase: float
@@ -608,6 +609,7 @@ def initialise_engine(seed: str) -> EngineState:
         lead_gain=intro_gains["lead"],
         arp_gain=intro_gains["arp"],
         pad_gain=intro_gains["pad"],
+        snare_gain=intro_gains["snare"],
         sidechain_env=1.0,
         lead_lfo_phase=0.0,
         bass_lfo_phase=0.0,
@@ -670,6 +672,11 @@ def advance_engine(
             state.phase = PHASE_SEQUENCE[next_idx]
             state.phase_bar = 0
             state.transition_step = PHASE_TRANSITION_BARS * STEPS_PER_BAR
+            # Silence beat: zero all gains at the Buildup→Drop boundary so the
+            # single-beat gap before the Drop lands with maximum impact.
+            if state.phase == "Drop":
+                for v in ("kick", "bass", "lead", "arp", "pad", "snare"):
+                    setattr(state, f"{v}_gain", 0.0)
             state.lead_tgate_pattern = tgate_pattern(
                 state.rng.choice(TGATE_SEEDS)
             )
@@ -693,7 +700,7 @@ def advance_engine(
     if state.transition_step > 0:
         target = PHASE_TARGET_GAINS[state.phase]
         denom = float(state.transition_step)
-        for voice in ("kick", "bass", "lead", "arp", "pad"):
+        for voice in ("kick", "bass", "lead", "arp", "pad", "snare"):
             cur = getattr(state, f"{voice}_gain")
             tgt = target[voice]
             setattr(state, f"{voice}_gain", cur + (tgt - cur) / denom)
@@ -1070,6 +1077,45 @@ def synthesise_kick(
         phase += freq / SAMPLE_RATE
         amp = math.exp(-t / KICK_ENV_TAU)
         buf[i] = math.sin(2.0 * math.pi * phase) * amp
+    return buf, buf   # centre-panned
+
+
+# --- SYNTHESIS: SNARE / CLAP ---
+
+def synthesise_snare(
+    noise_rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Synthesise one snare/clap hit: band-passed noise burst.
+
+    White noise burst decayed with a 25 ms tau, high-passed at 200 Hz and
+    low-passed at 5 kHz via two IIR stages.  Used in the Buildup snare roll.
+
+    :param noise_rng: Fast numpy RNG for noise generation.
+    :returns: ``(left_wave, right_wave)`` float32 arrays.
+    """
+    duration_s = 0.060        # 60 ms total
+    n = int(SAMPLE_RATE * duration_s)
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+
+    # Noise burst with exponential decay
+    raw = noise_rng.standard_normal(n).astype(np.float32)
+    env = np.exp(-t / 0.025).astype(np.float32)
+    buf = raw * env * 0.6
+
+    # IIR low-pass at 5000 Hz (one-pole)
+    a_lp = (2.0 * math.pi * 5000.0) / (2.0 * math.pi * 5000.0 + SAMPLE_RATE)
+    y_lp: float = 0.0
+    for i in range(n):
+        y_lp = y_lp + a_lp * (float(buf[i]) - y_lp)
+        buf[i] = np.float32(y_lp)
+
+    # IIR high-pass at 200 Hz (one-pole): y_hp = x - x_lp where x_lp tracks dc
+    a_hp = (2.0 * math.pi * 200.0) / (2.0 * math.pi * 200.0 + SAMPLE_RATE)
+    y_dc: float = 0.0
+    for i in range(n):
+        y_dc = y_dc + a_hp * (float(buf[i]) - y_dc)
+        buf[i] = np.float32(float(buf[i]) - y_dc)
+
     return buf, buf   # centre-panned
 
 
@@ -1506,6 +1552,7 @@ def main() -> None:
     pad_active: list[ActiveNote] = []
     arp_notes: list[ArpNote] = []
     kick_notes: list[ArpNote] = []
+    snare_notes: list[ArpNote] = []
 
     # Noise RNG — fast numpy generator seeded from state.rng for determinism
     noise_rng = np.random.default_rng(
@@ -1610,6 +1657,20 @@ def main() -> None:
                 if state.sidechain_env > SIDECHAIN_DEPTH:
                     state.sidechain_env = SIDECHAIN_DEPTH
                 midi.addNote(0, 4, 36, beat_time, STEP_BEATS, KICK_VELOCITY)
+
+            # e2. Snare roll (Buildup only — escalating density per phase_bar)
+            if state.phase == "Buildup" and state.snare_gain > 0.0:
+                pb = state.phase_bar
+                fire_snare = (
+                    (pb < 4 and step_in_bar in (4, 12))           # half-note backbeat
+                    or (4 <= pb < 12 and step_in_bar in (2, 6, 10, 14))  # quarter backbeat
+                    or (pb >= 12 and step_in_bar % 2 == 0)        # 8th-note roll
+                )
+                if fire_snare:
+                    sl, sr = synthesise_snare(noise_rng)
+                    snare_notes.append(
+                        ArpNote(buffer_l=sl, buffer_r=sr, sample_pos=0)
+                    )
 
             # f. Bass
             if state.bass_gain > 0.0:
@@ -1780,13 +1841,20 @@ def main() -> None:
             pad_l = pad_reverb_l.process(pad_l, wet=_pad_wet)
             pad_r = pad_reverb_r.process(pad_r, wet=_pad_wet)
 
-            # k. Noise riser (Build-up only)
+            # k. Snare roll + noise riser (Build-up only)
+            snare_l, snare_r = _render_arp_accumulator(
+                snare_notes, samples_per_step
+            )
+            snare_l = snare_l * state.snare_gain
+            snare_r = snare_r * state.snare_gain
+
             voice_buffers: list[tuple[np.ndarray, np.ndarray]] = [
                 (kick_l, kick_r),
                 (bass_l, bass_r),
                 (lead_l, lead_r),
                 (arp_l, arp_r),
                 (pad_l, pad_r),
+                (snare_l, snare_r),
             ]
             if state.phase == "Buildup" and state.noise_riser_amplitude > 0.0:
                 noise_chunk = (
