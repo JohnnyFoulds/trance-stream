@@ -101,8 +101,8 @@ LEAD_LOW: int = 62    # D4  — lead lives in one warm mid octave
 LEAD_HIGH: int = 74   # D5  — never goes piercing high
 ARP_LOW: int = 48     # C3  — arp lives below the lead
 ARP_HIGH: int = 62    # D4
-PAD_LOW: int = 48     # C3
-PAD_HIGH: int = 72    # C5
+PAD_LOW: int = 60     # C4 — keep pad above bass register
+PAD_HIGH: int = 79    # G5
 
 # Phrase / bar shaping
 MAX_LEAD_INTERVAL: int = 7
@@ -135,31 +135,31 @@ DETUNE_CENTS_BASS: float = 8.0
 DETUNE_CENTS_PAD: float = 20.0
 
 # Per-voice level trims (applied at note creation; tune by ear)
-BASS_LEVEL: float = 0.45   # bass is very busy (rolling 16ths); trim to sit under lead
-LEAD_LEVEL: float = 0.90   # lead is the main voice; keep it loud
-PAD_LEVEL:  float = 0.55   # pad is sustained background; keep it quiet
+BASS_LEVEL: float = 0.35   # rolling 16ths; keep under kick
+LEAD_LEVEL: float = 0.55   # 3-voice stack × 1/3 each = effective 0.55; sits in mix
+PAD_LEVEL:  float = 0.20   # wide voicing adds 3 notes incl. bass register; keep low
 
 # Kick synthesis (starter values; tune by ear)
 KICK_F0: float = 160.0    # Hz, sweep start
 KICK_F1: float = 50.0     # Hz, sweep end
-KICK_DECAY_S: float = 0.07
-KICK_ENV_TAU: float = 0.025
+KICK_DECAY_S: float = 0.10   # longer body gives more thump
+KICK_ENV_TAU: float = 0.035  # slower attack decay = more audible transient
 
 # Arp synthesis
 ARP_DECAY_TAU: float = 0.18
 ARP_CUTOFF_HZ: float = 4500.0   # tame harshness without killing the sheen
 
 # Sidechain (starter values; tune by ear)
-SIDECHAIN_DEPTH: float = 0.3
-SIDECHAIN_RELEASE: int = 8    # steps to recover
+SIDECHAIN_DEPTH: float = 0.05  # duck bass/pad almost to silence on kick hit
+SIDECHAIN_RELEASE: int = 12    # recover over ~0.75 beats — classic trance pumping
 
 # Trance gate
 TGATE_SEEDS: list[int] = [
     45, 116, 99, 100, 107, 53, 57, 58,
     67, 81, 89, 115, 8, 118, 120, 149,
 ]
-TGATE_ATTENUATION: float = 0.05
-TGATE_RAMP_MS: float = 2.0
+TGATE_ATTENUATION: float = 0.0   # fully mute closed slots (not just attenuate)
+TGATE_RAMP_MS: float = 8.0      # 8ms ramp removes clicks without blurring the gate
 
 # Filter LFO
 LEAD_CUTOFF_BASE: float = 12000.0
@@ -173,7 +173,7 @@ PAD_CUTOFF_SWEEP: float = 600.0
 PAD_LFO_RATE: float = 0.05
 
 # Soft-clip drive (tune by ear)
-DRIVE: float = 1.5
+DRIVE: float = 0.8   # light saturation; was 1.5 which crushed kick transients
 
 # CA bit positions (spread across 32-wide row)
 LEAD_GATE: int = 5
@@ -393,17 +393,18 @@ def chord_wide_voicing(
     chord: list[int],
     mid_note: int,
 ) -> list[int]:
-    """Build a wide-spread pad voicing: mid note plus bass intervals below.
+    """Build a mid-register pad voicing that does not fight the bass/kick.
 
-    Returns ``[mid_note, mid_note - 14, mid_note - 21]``, the voicing used by
-    Switch Angel in her live trance demos (orbit 2 pad voice).  The lower notes
-    provide the bass body; the middle note carries the harmonic colour.
+    Returns the mid note plus a chord fifth above and a minor third below —
+    a spread triad in the mid register.  We do NOT use Switch Angel's -14/-21
+    bass intervals here because our setup has a separate bass voice; those
+    low notes would clash with the kick and bass synth.
 
     :param chord: Bass-register chord tones (unused; caller picks mid_note).
     :param mid_note: Central MIDI note; intervals are relative to this.
-    :returns: Three-note list ``[mid, mid-14, mid-21]``.
+    :returns: Three-note list ``[mid-3, mid, mid+7]``.
     """
-    return [mid_note, mid_note - 14, mid_note - 21]
+    return [mid_note - 3, mid_note, mid_note + 7]
 
 
 def chord_close_voicing(
@@ -649,6 +650,14 @@ def advance_engine(
         state.bar_note_count = 0
         state.bar_net_direction = 0
         state.phase_bar += 1
+        # Re-roll tgate patterns every bar so the gate is never mechanically
+        # identical between bars (matches Switch Angel's rand-based gate).
+        state.lead_tgate_pattern = tgate_pattern(
+            state.rng.choice(TGATE_SEEDS)
+        )
+        state.pad_tgate_pattern = tgate_pattern(
+            state.rng.choice(TGATE_SEEDS)
+        )
 
         # Phase transition
         phase_len = INTRO_PHASE_BARS if state.phase == "Intro" else PHASE_BARS
@@ -1103,23 +1112,27 @@ def apply_tgate(
     :param samples_per_step: Samples per step.
     :returns: ``(gated_left, gated_right)`` float32 arrays.
     """
-    ramp_samples = max(1, int(SAMPLE_RATE * TGATE_RAMP_MS / 1000.0))
+    # Switch Angel uses fill().clip(.7): notes sustain into silence, then cut at
+    # 70% of the slot. We model this with a smooth cosine fade-out when the next
+    # slot is closed, rather than a hard chop at the slot boundary.
     current_gate = pattern[step_in_bar]
-    prev_gate = pattern[(step_in_bar - 1) % 16]
+    next_gate    = pattern[(step_in_bar + 1) % 16]
 
-    if current_gate == 1:
-        target_level = 1.0
-        start_level = TGATE_ATTENUATION if prev_gate == 0 else 1.0
+    if current_gate == 0:
+        # Closed slot — silence
+        envelope = np.zeros(samples_per_step, dtype=np.float32)
+    elif next_gate == 0:
+        # Open slot but next is closed: sustain through 70% then cosine fade out
+        clip_point = int(samples_per_step * 0.70)
+        ramp_len   = samples_per_step - clip_point
+        envelope   = np.ones(samples_per_step, dtype=np.float32)
+        fade       = 0.5 * (1.0 + np.cos(
+            np.linspace(0.0, math.pi, ramp_len, dtype=np.float32)
+        ))
+        envelope[clip_point:] = fade
     else:
-        target_level = TGATE_ATTENUATION
-        start_level = 1.0 if prev_gate == 1 else TGATE_ATTENUATION
-
-    envelope = np.full(samples_per_step, target_level, dtype=np.float32)
-    if start_level != target_level:
-        ramp_end = min(ramp_samples, samples_per_step)
-        envelope[:ramp_end] = np.linspace(
-            start_level, target_level, ramp_end, dtype=np.float32
-        )
+        # Open slot, next also open — hold at full level
+        envelope = np.ones(samples_per_step, dtype=np.float32)
 
     return buffer_l * envelope, buffer_r * envelope
 
