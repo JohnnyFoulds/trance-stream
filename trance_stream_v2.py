@@ -869,12 +869,9 @@ def main() -> None:
         "pulse_on", "hihat_on", "kick_syncopated",
     ]
     eff_stage_bars: dict[str, int] = {}
-    prev_bar = 0
     for key in _stage_order:
         raw = STAGE_BARS[key] + cfg.stage_jitter[key]
-        clamped = max(prev_bar, max(0, raw))
-        eff_stage_bars[key] = clamped
-        prev_bar = clamped + 4
+        eff_stage_bars[key] = max(0, raw)
 
     # Print startup config line
     root_pc = cfg.root_midi % 12
@@ -901,7 +898,15 @@ def main() -> None:
     midi = MIDIFile(1)
     midi.addTempo(0, 0, args.bpm)
 
-    state = ArrangementState()
+    state = ArrangementState(
+        kick_gain  = _target_gain(0, "kick",  eff_stage_bars),
+        hihat_gain = _target_gain(0, "hihat", eff_stage_bars),
+        clap_gain  = _target_gain(0, "clap",  eff_stage_bars),
+        pad_gain   = _target_gain(0, "pad",   eff_stage_bars),
+        lead_gain  = _target_gain(0, "lead",  eff_stage_bars),
+        pulse_gain = _target_gain(0, "pulse", eff_stage_bars),
+        master_vol = args.volume,
+    )
     lead_delay = FeedbackDelay()
     pad_reverb_l = SimpleFDN()
     pad_reverb_r = SimpleFDN()
