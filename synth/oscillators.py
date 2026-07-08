@@ -44,6 +44,11 @@ def sawtooth(
     for n in range(1, n_harmonics + 1):
         samples += ((-1) ** (n + 1)) * (2.0 / (np.pi * n)) * np.sin(n * phase_vec)
 
+    # Additive synthesis has ~9% Gibbs overshoot at discontinuities; normalise.
+    peak = np.abs(samples).max()
+    if peak > 0:
+        samples /= peak
+
     end_phase = (freq_hz * n_samples / sr + phase) % 1.0
     return samples.astype(np.float32), end_phase
 
