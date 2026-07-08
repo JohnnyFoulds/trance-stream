@@ -192,7 +192,7 @@ PHASE_TARGET_GAINS: dict[str, dict[str, float]] = {
     "Breakdown": {"kick": 0.0, "bass": 0.0, "lead": 0.7,
                   "arp": 1.0, "pad": 1.0, "snare": 0.0},
     "Buildup":   {"kick": 0.5, "bass": 0.0, "lead": 0.0,
-                  "arp": 1.0, "pad": 1.0, "snare": 1.0},
+                  "arp": 1.0, "pad": 1.0, "snare": 0.0},
     "Drop":      {"kick": 1.0, "bass": 1.0, "lead": 1.0,
                   "arp": 0.0, "pad": 1.0, "snare": 0.0},
 }
@@ -723,13 +723,6 @@ def advance_engine(
     state.sidechain_env = min(
         1.0, state.sidechain_env + 1.0 / SIDECHAIN_RELEASE
     )
-
-    # Noise riser (Build-up only)
-    if state.phase == "Buildup":
-        state.noise_riser_amplitude = min(
-            1.0,
-            state.noise_riser_amplitude + _NOISE_RISER_STEP,
-        )
 
     return state
 
@@ -1857,14 +1850,6 @@ def main() -> None:
                 (pad_l, pad_r),
                 (snare_l, snare_r),
             ]
-            if state.phase == "Buildup" and state.noise_riser_amplitude > 0.0:
-                noise_chunk = (
-                    noise_rng.standard_normal(samples_per_step).astype(
-                        np.float32
-                    ) * state.noise_riser_amplitude * 0.04
-                )
-                voice_buffers.append((noise_chunk, noise_chunk))
-
             # l. Mix and soft-clip
             mix_l, mix_r = mix_and_limit(
                 voice_buffers, state.master_volume_current
