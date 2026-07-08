@@ -8,12 +8,18 @@
 import numpy as np
 
 
-def acidenv(n_samples: int, sr: int, amount: float = 0.55) -> np.ndarray:
+def acidenv(n_samples: int, sr: int, amount: float = 0.55,
+            decay_s: float = None) -> np.ndarray:
     """SA's exact acid envelope: fast attack, exponential decay on LP filter cutoff.
 
     SA's confirmed params from switch_angel_vocabulary.md:
       lpf(100).lpenv(x*9).lps(.2).lpd(.12).lpq(2)
     where x=amount.
+
+    decay_s overrides the tau computed from amount. Used by lead character variants:
+      'acid'   → decay_s=0.08  (tight, fast)
+      'smooth' → decay_s=0.15  (slower, more legato)
+      'stab'   → decay_s=0.04  (very short, percussive)
 
     Returns an array of shape (n_samples,) in [0, 1] representing the LP filter
     modulation amount. Caller multiplies by (target_hz - base_hz) and adds
@@ -21,7 +27,7 @@ def acidenv(n_samples: int, sr: int, amount: float = 0.55) -> np.ndarray:
     """
     t = np.arange(n_samples, dtype=np.float32) / sr
     attack_s = 0.003
-    tau = 0.08 * (0.3 + amount * 1.4)
+    tau = decay_s if decay_s is not None else 0.08 * (0.3 + amount * 1.4)
     attack_mask = t < attack_s
     decay_mask = ~attack_mask
     env = np.zeros(n_samples, dtype=np.float32)

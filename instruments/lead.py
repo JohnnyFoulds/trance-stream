@@ -23,16 +23,32 @@ class AcidLead:
     - Gain: GAIN_LEAD = 0.70
     """
 
-    def __init__(self, root_midi: int = 48, cutoff_slider: float = 0.593,
-                 gain: float = None, sr: int = 44100):
+    # Character presets: (saw_count, detune_cents, acidenv_decay_s, delay_wet, cutoff_slider)
+    _CHARACTERS = {
+        'acid':   (3, 30.0, 0.08, 0.7,  0.593),  # SA's default: tight acid
+        'smooth': (3, 50.0, 0.15, 0.5,  0.650),  # wider detuning, slower env, less delay
+        'stab':   (5, 20.0, 0.04, 0.25, 0.500),  # punchy stab: very short env, mostly dry
+    }
+
+    def __init__(self, root_midi: int = 48, cutoff_slider: float = None,
+                 gain: float = None, sr: int = 44100, character: str = 'acid'):
         from song.theory import GAIN_LEAD
         from synth.effects import FeedbackDelay
 
+        if character not in self._CHARACTERS:
+            character = 'acid'
+        (saw_count, detune_cents, _acidenv_decay, delay_wet,
+         default_slider) = self._CHARACTERS[character]
+
         self.root_midi     = root_midi
-        self.cutoff_slider = cutoff_slider
+        self.cutoff_slider = cutoff_slider if cutoff_slider is not None else default_slider
         self.gain          = gain if gain is not None else GAIN_LEAD
         self.sr            = sr
-        self._delay        = FeedbackDelay(delay_s=0.375, feedback=0.8, wet=0.7, sr=sr)
+        self.character     = character
+        self._saw_count    = saw_count
+        self._detune_cents = detune_cents
+        self._acidenv_decay = _acidenv_decay
+        self._delay        = FeedbackDelay(delay_s=0.375, feedback=0.8, wet=delay_wet, sr=sr)
         self._rng          = np.random.default_rng(42)
         self._osc_phases   = None  # shape (saw_count,); reset on each note trigger
 
@@ -89,7 +105,8 @@ class AcidLead:
         for note in midi_notes:
             note = max(0, min(127, int(note)))
             l, r, _ = supersaw(note, n_samples, self.sr,
-                                saw_count=3, detune_cents=30.0)
+                                saw_count=self._saw_count,
+                                detune_cents=self._detune_cents)
             if fm_depth > 0.0:
                 # True phase-modulation FM: modulator at 4× carrier frequency creates
                 # sidebands at carrier ± n·mod_freq landing prominently in 2k-8k Hz
@@ -109,8 +126,9 @@ class AcidLead:
             buf_r += r / n_notes
 
         # LP filter: acidenv sweeps the cutoff from a low base up to full cutoff.
-        # 8 stepped segments — bounded loop over segments, not samples.
-        env     = acidenv(n_samples, self.sr, amount=0.55)
+        # decay_s from character preset: fast (acid) → legato (smooth) → stabby (stab).
+        env     = acidenv(n_samples, self.sr, amount=0.55,
+                          decay_s=self._acidenv_decay)
         base_hz = min(100.0, cutoff * 0.05)
         n_segs  = 8
         seg_len = max(1, n_samples // n_segs)

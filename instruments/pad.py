@@ -29,7 +29,10 @@ class SupersawPad:
     """
 
     def __init__(self, root_midi: int = 48, cutoff_slider: float = 0.55,
-                 gain: float = None, sr: int = 44100):
+                 gain: float = None, sr: int = 44100,
+                 detune_cents: float = 60.0,
+                 room_size: float = 0.7,
+                 saw_count: int = 5):
         from song.theory import GAIN_PAD
         from synth.effects import SimpleFDN
 
@@ -37,7 +40,9 @@ class SupersawPad:
         self.cutoff_slider = cutoff_slider
         self.gain          = gain if gain is not None else GAIN_PAD
         self.sr            = sr
-        self._fdn          = SimpleFDN(room_size=0.7, sr=sr)
+        self.detune_cents  = detune_cents
+        self.saw_count     = saw_count
+        self._fdn          = SimpleFDN(room_size=room_size, sr=sr)
         self._osc_phases   = None  # shape (n_voices,), initialised on first render
 
     def render(self, midi_notes: list, n_samples: int,
@@ -90,17 +95,14 @@ class SupersawPad:
         if self._osc_phases is None or len(self._osc_phases) != n_voices:
             self._osc_phases = np.zeros(n_voices, dtype=np.float64)
 
-        # Normalise by the root voice weight only (not total_weight) so that
-        # the root voice has unity gain and sub-bass doublings add at their
-        # fractional weights — this preserves the original signal amplitude
-        # rather than dividing by 1.5 which silences the pad by 1/1.5.
         root_gain = voice_gains[0]  # always 1.0
         for i, (note, vg) in enumerate(zip(all_notes, voice_gains)):
             note = max(0, min(127, note))
             l, r, new_phases = supersaw(note, n_samples, self.sr,
-                                        saw_count=5, detune_cents=60.0,
-                                        osc_phases=self._osc_phases[i:i + 1].repeat(5))
-            self._osc_phases[i] = new_phases[2]
+                                        saw_count=self.saw_count,
+                                        detune_cents=self.detune_cents,
+                                        osc_phases=self._osc_phases[i:i + 1].repeat(self.saw_count))
+            self._osc_phases[i] = new_phases[len(new_phases) // 2]
             buf_l += l * vg
             buf_r += r * vg
 

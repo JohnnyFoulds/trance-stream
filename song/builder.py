@@ -125,8 +125,61 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
     # Drum seed: varies so each song has different noise texture on drums
     drum_seed = _hash_bits(88, 16)
 
+    # ── Instrument character ─────────────────────────────────────────────────
+    # Pad detune: 30–80 cents. Wide detune (>60) = lush/washy; tight (<40) = focused/cutting.
+    pad_detune_cents = 30.0 + (_hash_bits(104, 6) % 51)       # 30..80 cents
+
+    # Pad reverb room size: 0.3–0.9. Large = spacious/diffuse; small = dry/tight.
+    pad_room_size_idx = _hash_bits(110, 3) % 7                  # 0..6
+    pad_room_size = 0.3 + pad_room_size_idx * 0.1               # 0.3..0.9
+
+    # Pad saw count: 3, 5, or 7 voices. 3 = thin/focused; 7 = thick/massive.
+    pad_saw_count = [3, 5, 5, 7][_hash_bits(113, 2) % 4]       # 3/5/5/7 (5 most common)
+
+    # Lead character: 'acid' (SA's default — tight acidenv, low detune),
+    # 'smooth' (wider detune, softer env), 'stab' (very dry, short gate).
+    lead_character = ['acid', 'smooth', 'stab', 'acid'][_hash_bits(115, 2) % 4]
+
+    # Kick decay: 0.15–0.28 s. Short = punchy; long = boomy.
+    # Capped at 0.28s: at 140 BPM four-on-floor, kicks land every 0.43s.
+    # Beyond ~0.30s decay the tail of one kick overlaps the next, creating
+    # constant sub-bass rumble that drowns all other instruments.
+    kick_decay_s = 0.15 + (_hash_bits(117, 5) % 14) * 0.01     # 0.15..0.28
+
+    # Kick pitch floor: 30–70 Hz. Low = sub-weight; high = mid-punch.
+    kick_pitch_floor = 30.0 + (_hash_bits(122, 6) % 41)        # 30..70 Hz
+
+    # Hihat pattern: full 16ths, offbeat 8ths, or sparse straight 8ths.
+    hihat_pattern = ['full', 'full', 'offbeat', 'sparse'][_hash_bits(68, 2) % 4]
+
+    # Arc shape: how fast the song builds to full intensity.
+    # 'fast' = all stages done by bar ~64; 'steady' = default ~96; 'slow' = ~128
+    arc_shape = ['fast', 'steady', 'steady', 'slow'][_hash_bits(70, 2) % 4]
+
+    # Scale stage_bars by arc_shape — multiply all non-zero entries by a factor,
+    # then re-run the ordering pass so the sequence stays monotonic.
+    _arc_scale = {'fast': 0.6, 'steady': 1.0, 'slow': 1.4}[arc_shape]
+    if _arc_scale != 1.0:
+        for key in stage_bars:
+            if stage_bars[key] > 0:
+                stage_bars[key] = max(1, int(round(stage_bars[key] * _arc_scale)))
+        # Re-enforce monotonic ordering after scaling
+        prev = 0
+        for key in ['kick_on', 'pad_root_on', 'lead_root_on', 'lead_melody_on',
+                    'pad_chord_on', 'lead_voicing_on', 'clap_on', 'fm_on',
+                    'pulse_on', 'hihat_on', 'kick_syncopated']:
+            if key in stage_bars:
+                stage_bars[key] = max(stage_bars[key], prev + (1 if prev > 0 else 0))
+                prev = stage_bars[key]
+
     tracks = _build_tracks(stage_bars, root_midi, scale, chord_prog,
-                           filter_pb_bar, drum_seed=drum_seed, sr=SR)
+                           filter_pb_bar, drum_seed=drum_seed, sr=SR,
+                           pad_detune_cents=pad_detune_cents,
+                           pad_room_size=pad_room_size,
+                           pad_saw_count=pad_saw_count,
+                           lead_character=lead_character,
+                           kick_decay_s=kick_decay_s,
+                           kick_pitch_floor=kick_pitch_floor)
 
     return Song(
         bpm=float(bpm),
@@ -142,12 +195,26 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
         mood=mood,
         total_bars=total_bars,
         sr=SR,
+        pad_detune_cents=float(pad_detune_cents),
+        pad_room_size=float(pad_room_size),
+        pad_saw_count=int(pad_saw_count),
+        lead_character=lead_character,
+        kick_decay_s=float(kick_decay_s),
+        kick_pitch_floor=float(kick_pitch_floor),
+        hihat_pattern=hihat_pattern,
+        arc_shape=arc_shape,
     )
 
 
 def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
                   chord_prog: list, filter_pb_bar: int,
-                  drum_seed: int = 42, sr: int = SR) -> list:
+                  drum_seed: int = 42, sr: int = SR,
+                  pad_detune_cents: float = 60.0,
+                  pad_room_size: float = 0.7,
+                  pad_saw_count: int = 5,
+                  lead_character: str = 'acid',
+                  kick_decay_s: float = 0.25,
+                  kick_pitch_floor: float = 50.0) -> list:
     """Instantiate all instrument tracks with their arc functions."""
     from song.track import Track
     from song.arcs import filter_cutoff_arc, fm_depth_arc, hihat_decay_arc, gain_arc
@@ -156,7 +223,9 @@ def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
     tracks = []
 
     # Kick + hihat + clap share one DrumKit instance, seeded per-song
-    kit = DrumKit(seed=drum_seed, sr=sr)
+    kit = DrumKit(seed=drum_seed, sr=sr,
+                  kick_decay_s=kick_decay_s,
+                  kick_pitch_floor=kick_pitch_floor)
 
     tracks.append(Track(
         instrument=kit,
@@ -168,7 +237,10 @@ def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
     # Pad
     try:
         from instruments.pad import SupersawPad
-        pad = SupersawPad(root_midi=root_midi, sr=sr)
+        pad = SupersawPad(root_midi=root_midi, sr=sr,
+                          detune_cents=pad_detune_cents,
+                          room_size=pad_room_size,
+                          saw_count=pad_saw_count)
         tracks.append(Track(
             instrument=pad,
             instrument_type='pad',
@@ -182,7 +254,7 @@ def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
     # Lead
     try:
         from instruments.lead import AcidLead
-        lead = AcidLead(root_midi=root_midi, sr=sr)
+        lead = AcidLead(root_midi=root_midi, sr=sr, character=lead_character)
         tracks.append(Track(
             instrument=lead,
             instrument_type='lead',

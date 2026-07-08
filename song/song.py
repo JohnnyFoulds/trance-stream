@@ -27,3 +27,13 @@ class Song:
     mood:            str               # 'uplifting', 'dark', 'acid', etc.
     total_bars:      int = 128
     sr:              int = 44100
+
+    # Instrument character — seed-driven; what makes two songs audibly different
+    pad_detune_cents: float = 60.0    # supersaw detune: tight (30) to wide (80)
+    pad_room_size:    float = 0.7     # FDN reverb: dry/tight (0.3) to spacious (0.9)
+    pad_saw_count:    int   = 5       # supersaw voices: 3 (thin) to 7 (thick)
+    lead_character:   str   = 'acid'  # 'acid', 'smooth', or 'stab'
+    kick_decay_s:     float = 0.25    # kick length: punchy (0.12) to boomy (0.35)
+    kick_pitch_floor: float = 50.0    # kick bottom pitch: tight (70 Hz) to sub (30 Hz)
+    hihat_pattern:    str   = 'full'  # 'full' (all-16), 'offbeat' (8ths), 'sparse' (odd 8ths)
+    arc_shape:        str   = 'steady'  # 'fast', 'steady', or 'slow'

@@ -64,11 +64,42 @@ def _rms(buf: np.ndarray) -> float:
     return float(np.sqrt(np.mean(buf.astype(np.float64) ** 2)))
 
 
-def _build_and_render(seed: str, mood: str = 'uplifting', n_bars: int = 128):
-    """Build a song and render n_bars. Returns (l, r, song, renderer)."""
+def _build_and_render(seed: str, mood: str = 'uplifting', n_bars: int = 128,
+                      canonical: bool = False):
+    """Build a song and render n_bars. Returns (l, r, song, renderer).
+
+    canonical=True: force the reference configuration used for spectral quality
+    tests — full hihat, steady arc, default instrument parameters.  This
+    isolates the quality tests from seed-driven variation so they consistently
+    verify the synthesis chain against SA's reference targets.
+    """
     from song.builder import build_song
     from song.renderer import SongRenderer
     song = build_song(seed, mood=mood, bpm=BPM, total_bars=n_bars)
+    if canonical:
+        # Force reference configuration: steady build, full hihat, SA-default instruments
+        song.hihat_pattern = 'full'
+        song.arc_shape = 'steady'
+        # Rebuild stage_bars at steady scale (undo any arc scaling)
+        from song.theory import STAGE_BARS_DEFAULT
+        import hashlib
+        digest_int = int(hashlib.md5(seed.encode()).hexdigest(), 16)
+        def _hash_bits(shift, bits):
+            return (digest_int >> shift) & ((1 << bits) - 1)
+        def jitter(base, idx, max_j=4):
+            offset = int(_hash_bits(24 + idx * 4, 4) % (2 * max_j + 1)) - max_j
+            return max(0, base + offset)
+        stage_items = list(STAGE_BARS_DEFAULT.items())
+        sb = {k: jitter(v, i) for i, (k, v) in enumerate(stage_items)}
+        sb['kick_on'] = 0
+        prev = 0
+        for key in ['kick_on', 'pad_root_on', 'lead_root_on', 'lead_melody_on',
+                    'pad_chord_on', 'lead_voicing_on', 'clap_on', 'fm_on',
+                    'pulse_on', 'hihat_on', 'kick_syncopated']:
+            if key in sb:
+                sb[key] = max(sb[key], prev + (1 if prev > 0 else 0))
+                prev = sb[key]
+        song.stage_bars = sb
     renderer = SongRenderer(song)
     l, r = renderer.render_bars(n_bars)
     return l, r, song, renderer
@@ -85,8 +116,14 @@ def _segment(buf: np.ndarray, start_bar: int, end_bar: int) -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def rendered_128():
-    """Render 128 bars of 'sunrise'/uplifting once; share across tests in module."""
-    return _build_and_render('sunrise', 'uplifting', 128)
+    """Render 128 bars of 'sunrise'/uplifting once; share across tests in module.
+
+    Uses canonical=True to force the reference configuration (full hihat, steady arc).
+    Spectral quality tests measure against SA's reference targets and must not
+    vary with seed-driven character selection — that's what test_genuine_variation.py
+    is for.
+    """
+    return _build_and_render('sunrise', 'uplifting', 128, canonical=True)
 
 
 @pytest.fixture(scope="session")

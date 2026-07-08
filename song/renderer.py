@@ -67,6 +67,7 @@ class SongRenderer:
         from song.theory import (
             KICK_STEPS_BASIC, KICK_STEPS_SYNCOPATED,
             CLAP_STEPS_BACKBEAT, HIHAT_STEPS,
+            HIHAT_STEPS_OFFBEAT, HIHAT_STEPS_SPARSE,
             GAIN_KICK, GAIN_PAD, GAIN_LEAD,
             GAIN_HIHAT, GAIN_CLAP,
             chord_to_midi,
@@ -117,7 +118,14 @@ class SongRenderer:
                 decay_s = hihat_decay_arc(bar)
                 hh_l, hh_r = kick_track2.instrument.render_hihat(
                     decay_s=decay_s, gain=GAIN_HIHAT)
-                for step in HIHAT_STEPS:
+                hihat_pat = song.hihat_pattern if hasattr(song, 'hihat_pattern') else 'full'
+                if hihat_pat == 'offbeat':
+                    active_steps = HIHAT_STEPS_OFFBEAT
+                elif hihat_pat == 'sparse':
+                    active_steps = HIHAT_STEPS_SPARSE
+                else:
+                    active_steps = HIHAT_STEPS
+                for step in active_steps:
                     offset = step * sp16
                     end    = min(offset + len(hh_l), spb)
                     n      = end - offset

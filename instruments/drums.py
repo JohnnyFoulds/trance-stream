@@ -21,13 +21,18 @@ class DrumKit:
         clap_l, clap_r   = kit.render_clap(gain=0.7)
     """
 
-    def __init__(self, seed: int = 42, sr: int = 44100):
+    def __init__(self, seed: int = 42, sr: int = 44100,
+                 kick_decay_s: float = 0.25, kick_pitch_floor: float = 50.0):
         from synth.drums import kick, hihat, clap
 
         self._sr   = sr
         self._seed = seed
+        self._kick_decay_s     = kick_decay_s
+        self._kick_pitch_floor = kick_pitch_floor
 
-        self._kick_l,  self._kick_r  = kick(sr=sr, seed=seed)
+        self._kick_l,  self._kick_r  = kick(sr=sr, seed=seed,
+                                            decay_s=kick_decay_s,
+                                            pitch_floor=kick_pitch_floor)
         self._hihat_l, self._hihat_r = hihat(sr=sr, decay_s=0.08, seed=seed)
         self._clap_l,  self._clap_r  = clap(sr=sr, seed=seed)
 

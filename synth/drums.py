@@ -58,25 +58,29 @@ def _bandpass(
 # Drum voices
 # ---------------------------------------------------------------------------
 
-def kick(sr: int = 44100, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
+def kick(sr: int = 44100, seed: int = 42,
+         decay_s: float = 0.25, pitch_floor: float = 50.0
+         ) -> tuple[np.ndarray, np.ndarray]:
     """Synthesise one kick drum hit.
 
     Model: sine wave with fast pitch drop + short noise click.
 
-    Pitch envelope: 150 Hz → 50 Hz exponential drop, time constant 50 ms.
-    Amplitude envelope: 2 ms linear attack, then exponential decay (τ = 250 ms).
+    Pitch envelope: (pitch_floor + 100) Hz → pitch_floor Hz exponential drop,
+    time constant 50 ms.  Default: 150→50 Hz.
+    decay_s controls amplitude envelope length: punchy (0.12s) to boomy (0.35s).
     Click: high-frequency noise burst in the first 10 ms, tapered to zero.
-    Total length: 400 ms.
+    Total length: max(decay_s * 1.6, 0.2) seconds.
 
     Returns (buf_l, buf_r) — mono signal mirrored to stereo.
     """
     rng = np.random.default_rng(seed)
-    n_samples = int(sr * 0.4)
+    total_s = max(decay_s * 1.6, 0.2)
+    n_samples = int(sr * total_s)
     t = np.arange(n_samples, dtype=np.float64) / sr
 
-    # Pitch envelope: exponential drop from 150 Hz to 50 Hz.
+    # Pitch envelope: exponential drop from (pitch_floor + 100) Hz to pitch_floor.
     pitch_decay = 0.05
-    freq = 50.0 + 100.0 * np.exp(-t / pitch_decay)
+    freq = pitch_floor + 100.0 * np.exp(-t / pitch_decay)
 
     # Instantaneous phase via cumulative sum (vectorised, no sample loop).
     phase = 2.0 * np.pi * np.cumsum(freq) / sr
@@ -86,8 +90,6 @@ def kick(sr: int = 44100, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
     attack_n = int(0.002 * sr)
     amp = np.empty(n_samples, dtype=np.float64)
     amp[:attack_n] = np.linspace(0.0, 1.0, attack_n)
-    # Normalise decay so it starts at 1.0 exactly at attack_n.
-    decay_s = 0.25
     amp[attack_n:] = np.exp(-(t[attack_n:] - t[attack_n]) / decay_s)
 
     # Click transient: noise burst in first 10 ms, linearly faded.
