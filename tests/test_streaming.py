@@ -1,0 +1,364 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+"""Tests for --stream mode in trance_stream_v3.
+
+All tests mock sounddevice so no audio hardware is required.
+
+Key invariants verified:
+1. Streaming audio is sample-identical to batch rendering (same seed).
+2. WAV written bar-by-bar during streaming is valid and matches batch WAV.
+3. No files are created when no paths are passed.
+4. Files are created only when paths are explicitly provided.
+5. Partial stream (KeyboardInterrupt mid-way) returns clean partial audio.
+"""
+
+from __future__ import annotations
+
+import sys
+import pathlib
+import wave
+import unittest.mock as mock
+
+import numpy as np
+import pytest
+
+REPO_ROOT = pathlib.Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+SR = 44100
+BPM = 140.0
+SPB = int(SR * 4 * 60 / BPM)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_renderer(seed: str = 'sunrise', n_bars: int = 8):
+    from song.builder import build_song
+    from song.renderer import SongRenderer
+    song = build_song(seed, mood='uplifting', bpm=BPM, total_bars=n_bars)
+    return SongRenderer(song), song
+
+
+class _FakeStream:
+    """Minimal sounddevice.OutputStream stand-in that captures written blocks."""
+    def __init__(self, **kwargs):
+        self.blocks = []
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def close(self):
+        pass
+
+    def write(self, data):
+        self.blocks.append(data.copy())
+
+
+def _mock_sd(fake_stream: _FakeStream):
+    """Return a mock sounddevice module backed by the given fake stream."""
+    sd = mock.MagicMock()
+    sd.OutputStream.return_value = fake_stream
+    return sd
+
+
+# ---------------------------------------------------------------------------
+# Core correctness: streaming == batch
+# ---------------------------------------------------------------------------
+
+def test_stream_audio_matches_batch_render(tmp_path):
+    """Audio produced by _stream_bars must be sample-identical to render_bars."""
+    from trance_stream_v3 import _stream_bars
+
+    # Batch render
+    renderer_batch, _ = _make_renderer('sunrise', n_bars=8)
+    l_batch, r_batch = renderer_batch.render_bars(8)
+
+    # Stream render (same seed → same song)
+    renderer_stream, _ = _make_renderer('sunrise', n_bars=8)
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        l_stream, r_stream = _stream_bars(renderer_stream, 8, volume=1.0,
+                                          wav_path=None)
+
+    assert np.array_equal(l_batch, l_stream), \
+        "Left channel differs between batch and stream render"
+    assert np.array_equal(r_batch, r_stream), \
+        "Right channel differs between batch and stream render"
+
+
+def test_stream_blocks_sum_to_full_audio(tmp_path):
+    """Blocks written to the audio device must reconstruct the full audio."""
+    from trance_stream_v3 import _stream_bars
+
+    renderer, _ = _make_renderer('forest', n_bars=6)
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        l_out, r_out = _stream_bars(renderer, 6, volume=1.0, wav_path=None)
+
+    # Each block is shape (SPB, 2) — L and R interleaved
+    assert len(fake_stream.blocks) == 6, \
+        f"Expected 6 blocks written to stream, got {len(fake_stream.blocks)}"
+
+    reconstructed = np.concatenate(fake_stream.blocks, axis=0)
+    assert np.array_equal(reconstructed[:, 0], l_out), \
+        "Reconstructed L channel from stream blocks doesn't match returned L"
+    assert np.array_equal(reconstructed[:, 1], r_out), \
+        "Reconstructed R channel from stream blocks doesn't match returned R"
+
+
+def test_stream_volume_applied():
+    """Volume != 1.0 must scale the output uniformly."""
+    from trance_stream_v3 import _stream_bars
+
+    renderer_1, _ = _make_renderer('sunrise', n_bars=4)
+    renderer_half, _ = _make_renderer('sunrise', n_bars=4)
+    fake_1    = _FakeStream()
+    fake_half = _FakeStream()
+
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_1)}):
+        l1, _ = _stream_bars(renderer_1,    4, volume=1.0, wav_path=None)
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_half)}):
+        lh, _ = _stream_bars(renderer_half, 4, volume=0.5, wav_path=None)
+
+    np.testing.assert_allclose(lh, l1 * 0.5, rtol=1e-5,
+                               err_msg="volume=0.5 did not halve the output")
+
+
+# ---------------------------------------------------------------------------
+# WAV output
+# ---------------------------------------------------------------------------
+
+def test_stream_writes_valid_wav_when_path_given(tmp_path):
+    """_stream_bars must write a valid 16-bit stereo WAV when wav_path is set."""
+    from trance_stream_v3 import _stream_bars
+
+    wav_path = str(tmp_path / "stream_out.wav")
+    renderer, song = _make_renderer('sunrise', n_bars=4)
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer, 4, volume=1.0, wav_path=wav_path)
+
+    assert pathlib.Path(wav_path).exists(), "WAV file not created"
+    with wave.open(wav_path) as wf:
+        assert wf.getnchannels() == 2,       "WAV must be stereo"
+        assert wf.getframerate() == SR,       f"WAV sample rate must be {SR}"
+        assert wf.getsampwidth() == 2,        "WAV must be 16-bit"
+        assert wf.getnframes() == 4 * SPB,    \
+            f"WAV frame count {wf.getnframes()} != {4 * SPB}"
+
+
+def test_stream_wav_matches_batch_wav(tmp_path):
+    """WAV written during streaming must be sample-equivalent to batch write_wav."""
+    from trance_stream_v3 import _stream_bars
+
+    # Batch path
+    renderer_b, _ = _make_renderer('sunrise', n_bars=8)
+    renderer_b.render_bars(8)
+    batch_wav = str(tmp_path / "batch.wav")
+    renderer_b.write_wav(batch_wav)
+
+    # Stream path
+    renderer_s, _ = _make_renderer('sunrise', n_bars=8)
+    stream_wav = str(tmp_path / "stream.wav")
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer_s, 8, volume=1.0, wav_path=stream_wav)
+
+    # Compare raw PCM bytes
+    with wave.open(batch_wav) as wf:
+        batch_pcm = wf.readframes(wf.getnframes())
+    with wave.open(stream_wav) as wf:
+        stream_pcm = wf.readframes(wf.getnframes())
+
+    assert batch_pcm == stream_pcm, \
+        "Streaming WAV differs from batch WAV (same seed should be identical)"
+
+
+def test_stream_no_wav_when_no_path(tmp_path):
+    """No WAV file must be written when wav_path=None."""
+    from trance_stream_v3 import _stream_bars
+
+    renderer, _ = _make_renderer('sunrise', n_bars=4)
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer, 4, volume=1.0, wav_path=None)
+
+    wav_files = list(tmp_path.glob("*.wav"))
+    assert wav_files == [], f"Unexpected WAV files created: {wav_files}"
+
+
+# ---------------------------------------------------------------------------
+# Partial stream (KeyboardInterrupt)
+# ---------------------------------------------------------------------------
+
+def test_stream_keyboard_interrupt_returns_partial_audio():
+    """KeyboardInterrupt mid-stream must return partial audio cleanly (no crash)."""
+    from trance_stream_v3 import _stream_bars
+
+    n_bars = 8
+    interrupt_after = 3  # interrupt after 3 bars
+
+    renderer, _ = _make_renderer('sunrise', n_bars=n_bars)
+
+    call_count = [0]
+    original_render_bar = renderer._render_bar
+
+    def patched_render_bar():
+        call_count[0] += 1
+        if call_count[0] > interrupt_after:
+            raise KeyboardInterrupt
+        return original_render_bar()
+
+    renderer._render_bar = patched_render_bar
+
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        l_out, r_out = _stream_bars(renderer, n_bars, volume=1.0, wav_path=None)
+
+    assert len(l_out) == interrupt_after * SPB, \
+        f"Partial audio length {len(l_out)} != {interrupt_after * SPB}"
+    assert fake_stream.stopped, "Stream must be stopped after KeyboardInterrupt"
+
+
+def test_stream_keyboard_interrupt_closes_wav(tmp_path):
+    """A partial stream must still produce a valid (partial) WAV file."""
+    from trance_stream_v3 import _stream_bars
+
+    wav_path = str(tmp_path / "partial.wav")
+    interrupt_after = 2
+
+    renderer, _ = _make_renderer('sunrise', n_bars=8)
+    call_count = [0]
+    original = renderer._render_bar
+
+    def patched():
+        call_count[0] += 1
+        if call_count[0] > interrupt_after:
+            raise KeyboardInterrupt
+        return original()
+
+    renderer._render_bar = patched
+
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer, 8, volume=1.0, wav_path=wav_path)
+
+    assert pathlib.Path(wav_path).exists(), "Partial WAV not written on interrupt"
+    with wave.open(wav_path) as wf:
+        assert wf.getnchannels() == 2
+        assert wf.getnframes() == interrupt_after * SPB, \
+            f"Partial WAV has {wf.getnframes()} frames, expected {interrupt_after * SPB}"
+
+
+# ---------------------------------------------------------------------------
+# sounddevice unavailable fallback
+# ---------------------------------------------------------------------------
+
+def test_stream_fallback_when_sounddevice_missing():
+    """If sounddevice is not installed, _stream_bars must fall back gracefully."""
+    from trance_stream_v3 import _stream_bars
+
+    renderer, _ = _make_renderer('sunrise', n_bars=4)
+
+    # Simulate sounddevice not installed by raising ImportError on import
+    with mock.patch.dict('sys.modules', {'sounddevice': None}):
+        l_out, r_out = _stream_bars(renderer, 4, volume=1.0, wav_path=None)
+
+    assert len(l_out) == 4 * SPB, \
+        f"Fallback render returned wrong length: {len(l_out)}"
+    assert l_out.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# CLI argument behaviour (no audio device needed)
+# ---------------------------------------------------------------------------
+
+def test_cli_stream_no_default_files(tmp_path, monkeypatch):
+    """Running --stream must not write any files unless --wav/--out-midi given."""
+    import trance_stream_v3 as v3
+
+    written_paths = []
+
+    def fake_stream_bars(renderer, n_bars, volume, wav_path):
+        if wav_path:
+            written_paths.append(wav_path)
+        l = np.zeros(n_bars * SPB, dtype=np.float32)
+        r = np.zeros(n_bars * SPB, dtype=np.float32)
+        renderer._audio_l = [l[i*SPB:(i+1)*SPB] for i in range(n_bars)]
+        renderer._audio_r = [r[i*SPB:(i+1)*SPB] for i in range(n_bars)]
+        return l, r
+
+    monkeypatch.setattr(v3, '_stream_bars', fake_stream_bars)
+    monkeypatch.setattr(sys, 'argv', [
+        'trance_stream_v3.py', '--stream', '--bars', '4', '--seed', 'sunrise'
+    ])
+
+    v3.main()
+
+    assert written_paths == [], \
+        f"--stream without --wav must not write files; got {written_paths}"
+
+
+def test_cli_stream_writes_wav_when_requested(tmp_path, monkeypatch):
+    """Running --stream --wav <path> must pass that path to _stream_bars."""
+    import trance_stream_v3 as v3
+
+    captured_wav = []
+
+    def fake_stream_bars(renderer, n_bars, volume, wav_path):
+        captured_wav.append(wav_path)
+        l = np.zeros(n_bars * SPB, dtype=np.float32)
+        r = np.zeros(n_bars * SPB, dtype=np.float32)
+        renderer._audio_l = [l[i*SPB:(i+1)*SPB] for i in range(n_bars)]
+        renderer._audio_r = [r[i*SPB:(i+1)*SPB] for i in range(n_bars)]
+        return l, r
+
+    wav_out = str(tmp_path / "out.wav")
+    monkeypatch.setattr(v3, '_stream_bars', fake_stream_bars)
+    monkeypatch.setattr(sys, 'argv', [
+        'trance_stream_v3.py', '--stream', '--bars', '4',
+        '--seed', 'sunrise', '--wav', wav_out
+    ])
+
+    v3.main()
+
+    assert captured_wav == [wav_out], \
+        f"Expected wav_path={wav_out!r}, got {captured_wav}"
+
+
+def test_cli_no_stream_writes_default_wav(tmp_path, monkeypatch):
+    """Non-stream mode must write WAV to /tmp/trance_v3.wav by default."""
+    import trance_stream_v3 as v3
+
+    written = []
+    original_write_wav = None
+
+    from song.renderer import SongRenderer
+
+    orig_init = SongRenderer.__init__
+
+    def patched_init(self, song):
+        orig_init(self, song)
+        self._test_written = written
+
+    def patched_write_wav(self, path):
+        written.append(path)
+
+    monkeypatch.setattr(SongRenderer, 'write_wav', patched_write_wav)
+    monkeypatch.setattr(sys, 'argv', [
+        'trance_stream_v3.py', '--bars', '4', '--seed', 'sunrise'
+    ])
+
+    v3.main()
+
+    assert any(p == '/tmp/trance_v3.wav' for p in written), \
+        f"Expected default WAV path '/tmp/trance_v3.wav' in {written}"
