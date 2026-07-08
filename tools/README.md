@@ -1,8 +1,9 @@
 # Diagnostic Tools
 
-Two scripts for understanding what `trance_stream.py` is actually producing.
-They work on the WAV and MIDI files that `trance_stream.py` writes with `--wav`
-and `--out_midi`, so you never need a running audio stream to diagnose a problem.
+Three scripts for understanding what `trance_stream.py` is actually producing and
+how it compares against a reference track.  They work on the WAV and MIDI files
+that `trance_stream.py` writes with `--wav` and `--out_midi`, so you never need a
+running audio stream to diagnose a problem.
 
 ---
 
@@ -17,6 +18,11 @@ python tools/analyse_audio.py /tmp/out.wav /tmp/out.mid --seed center --mood upl
 
 # 3. Drill into specific bars to see exact notes
 python tools/midi_forensic.py /tmp/out.mid --seed center --bars 20 --voice lead
+
+# 4. Compare spectrograms with a reference track (requires librosa)
+python tools/spectrogram.py /tmp/switch_angel_ref.wav --out /tmp/ref_spec.png --title "Reference"
+python tools/spectrogram.py /tmp/out.wav --out /tmp/gen_spec.png --title "Generated"
+open /tmp/ref_spec.png /tmp/gen_spec.png
 ```
 
 ---
@@ -140,6 +146,52 @@ pip install mido
 
 ---
 
+## `spectrogram.py`
+
+**What it does:** Generates a mel spectrogram PNG and prints a text spectral report
+for a WAV file — spectral energy by band, spectral centroid over time, and a
+brightness score (fraction of energy above 2 kHz).
+
+Use this to compare the generated output against a reference track visually.  Two
+spectrograms side by side immediately show frequency balance differences that are
+hard to read from the band-energy table alone.
+
+### Example output
+
+```
+File:        /tmp/switch_angel_ref.wav
+Duration:    277.8 s  (44100 Hz, 2 ch)
+
+Spectral energy by band (relative to loudest):
+  sub         ██████████████████████████████  +0.0 dB
+  bass        ██████████████                  -6.5 dB
+  mid         ████                            -17.3 dB
+  hi-mid      █                               -25.4 dB
+  air                                         -39.0 dB
+
+Spectral centroid: mean=809 Hz  (trance target: 800-2500 Hz)
+Brightness score:  3.88% of energy above 2 kHz
+```
+
+### Usage
+
+```
+python tools/spectrogram.py [WAV_PATH] [--out PNG_PATH] [--title TITLE]
+
+Arguments:
+  WAV_PATH   Path to WAV file  (default: /tmp/trance_out.wav)
+  --out      Output PNG path   (default: <wav>.png)
+  --title    Title shown on spectrogram
+```
+
+### Dependencies
+
+```
+pip install numpy matplotlib librosa
+```
+
+---
+
 ## How these tools were used during development
 
 These tools were written to diagnose specific problems heard in the audio output.
@@ -168,3 +220,15 @@ The final correct state for the lead voice:
 - Mean interval ≤ 5 semitones (conjunct motion)
 - Pitch range capped at D4–D5 (warm mid register, not piercing)
 - 0% out-of-scale notes
+
+**Switch Angel reference analysis (July 2026):** obtained her actual Strudel source
+code and reference WAV.  Key findings that informed generator changes:
+
+- Her "lead" is a **3-voice supersaw chord stack** (+7 / 0 / -7 semitones) — not
+  a single-note melody.  Trance gate pulses this chord; the melodic movement comes
+  from the slow root-note change once per bar.
+- Lead filter is **almost fully open** (~15 kHz), not a warm mid filter.
+- Arp voice does not exist in her setup — rhythmic movement is entirely from the
+  trance gate.  The generator's separate arp voice was cluttering the mix.
+- Pad voicing is **wide-spread** (root −14 and −21 semitones below), not
+  close-position.  The lower notes supply the bass body.

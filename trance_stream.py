@@ -130,7 +130,7 @@ CHORD_DURATION_BARS: int = 4
 SAW_COUNT_LEAD: int = 7
 SAW_COUNT_BASS: int = 3
 SAW_COUNT_PAD: int = 7
-DETUNE_CENTS_LEAD: float = 15.0
+DETUNE_CENTS_LEAD: float = 50.0
 DETUNE_CENTS_BASS: float = 8.0
 DETUNE_CENTS_PAD: float = 20.0
 
@@ -162,8 +162,8 @@ TGATE_ATTENUATION: float = 0.05
 TGATE_RAMP_MS: float = 2.0
 
 # Filter LFO
-LEAD_CUTOFF_BASE: float = 3500.0
-LEAD_CUTOFF_SWEEP: float = 2000.0
+LEAD_CUTOFF_BASE: float = 12000.0
+LEAD_CUTOFF_SWEEP: float = 4000.0
 LEAD_LFO_RATE: float = 0.15
 BASS_CUTOFF_BASE: float = 900.0
 BASS_CUTOFF_SWEEP: float = 400.0
@@ -186,13 +186,13 @@ PHASE_TARGET_GAINS: dict[str, dict[str, float]] = {
     "Intro":     {"kick": 0.4, "bass": 0.0, "lead": 0.0,
                   "arp": 0.7, "pad": 0.6},
     "Groove":    {"kick": 1.0, "bass": 1.0, "lead": 1.0,
-                  "arp": 1.0, "pad": 1.0},
+                  "arp": 0.0, "pad": 1.0},
     "Breakdown": {"kick": 0.0, "bass": 0.0, "lead": 0.7,
                   "arp": 1.0, "pad": 1.0},
     "Buildup":   {"kick": 0.5, "bass": 0.0, "lead": 0.0,
                   "arp": 1.0, "pad": 1.0},
     "Drop":      {"kick": 1.0, "bass": 1.0, "lead": 1.0,
-                  "arp": 1.0, "pad": 1.0},
+                  "arp": 0.0, "pad": 1.0},
 }
 PHASE_SEQUENCE: list[str] = [
     "Intro", "Groove", "Breakdown", "Buildup", "Drop",
@@ -387,6 +387,23 @@ def chord_to_register(
             result.append(tone)
             tone += 12
     return sorted(set(result))
+
+
+def chord_wide_voicing(
+    chord: list[int],
+    mid_note: int,
+) -> list[int]:
+    """Build a wide-spread pad voicing: mid note plus bass intervals below.
+
+    Returns ``[mid_note, mid_note - 14, mid_note - 21]``, the voicing used by
+    Switch Angel in her live trance demos (orbit 2 pad voice).  The lower notes
+    provide the bass body; the middle note carries the harmonic colour.
+
+    :param chord: Bass-register chord tones (unused; caller picks mid_note).
+    :param mid_note: Central MIDI note; intervals are relative to this.
+    :returns: Three-note list ``[mid, mid-14, mid-21]``.
+    """
+    return [mid_note, mid_note - 14, mid_note - 21]
 
 
 def chord_close_voicing(
@@ -1454,6 +1471,17 @@ def main() -> None:
         state.rng.randint(0, 2 ** 31)
     )
 
+    # Lead feedback delay — matches Switch Angel's .delay(0.4) on the lead orbit.
+    # Delay time: 0.4 × beat duration (i.e. a dotted-8th echo).
+    # Feedback: 0.35 (decays quickly, adds spatial depth without muddying).
+    _beat_samples = samples_per_step * 4   # samples per quarter note
+    _delay_samples = int(_beat_samples * 0.4)
+    _delay_buf_l = np.zeros(_delay_samples, dtype=np.float32)
+    _delay_buf_r = np.zeros(_delay_samples, dtype=np.float32)
+    _delay_write_pos = 0
+    _DELAY_FEEDBACK = 0.35
+    _DELAY_MIX = 0.40
+
     # Fade scalars
     if args.fade_in > 0:
         fade_in_step_size = args.volume / (args.fade_in * STEPS_PER_BAR)
@@ -1562,7 +1590,8 @@ def main() -> None:
                     dur_beats = n_steps * STEP_BEATS
                     midi.addNote(0, 2, midi_note, beat_time, dur_beats, vel)
 
-            # g. Lead
+            # g. Lead — fires as a 3-voice chord stack: base, +7, -7 semitones.
+            # This matches Switch Angel's .add("7,-7") voicing on the lead orbit.
             if state.lead_gain > 0.0:
                 lead_note = select_lead_note(state, chord, step_in_bar)
                 if lead_note is not None:
@@ -1571,21 +1600,24 @@ def main() -> None:
                         state.phrase_length, lead_note,
                         state.phrase_high_note, state.rng,
                     )
-                    osc_ph, il, ir, gn = init_supersaw(
-                        lead_note, vel / 127.0 * LEAD_LEVEL,
-                        SAW_COUNT_LEAD, DETUNE_CENTS_LEAD,
-                    )
-                    lead_active.append(ActiveNote(
-                        osc_phases=osc_ph, iir_L=il, iir_R=ir,
-                        gain=gn, midi_note=lead_note,
-                        saw_count=SAW_COUNT_LEAD,
-                        detune_cents=DETUNE_CENTS_LEAD,
-                        steps_remaining=STEPS_PER_BAR,
-                    ))
-                    midi.addNote(
-                        0, 0, lead_note, beat_time,
-                        STEPS_PER_BAR * STEP_BEATS, vel
-                    )
+                    gain_per_voice = vel / 127.0 * LEAD_LEVEL / 3.0
+                    for interval in (0, 7, -7):
+                        stacked = lead_note + interval
+                        osc_ph, il, ir, gn = init_supersaw(
+                            stacked, gain_per_voice,
+                            SAW_COUNT_LEAD, DETUNE_CENTS_LEAD,
+                        )
+                        lead_active.append(ActiveNote(
+                            osc_phases=osc_ph, iir_L=il, iir_R=ir,
+                            gain=gn, midi_note=stacked,
+                            saw_count=SAW_COUNT_LEAD,
+                            detune_cents=DETUNE_CENTS_LEAD,
+                            steps_remaining=STEPS_PER_BAR,
+                        ))
+                        midi.addNote(
+                            0, 0, stacked, beat_time,
+                            STEPS_PER_BAR * STEP_BEATS, vel
+                        )
 
             # h. Arp
             if state.arp_gain > 0.0:
@@ -1613,7 +1645,11 @@ def main() -> None:
             if is_chord_boundary:
                 # Clear old pad notes to avoid unbounded accumulation
                 pad_active.clear()
-                pad_chord = chord_close_voicing(chord, PAD_LOW)
+                # Wide-spread voicing: mid chord tone + bass intervals below,
+                # matching Switch Angel's .add("-14,-21") pad voicing.
+                pad_mid = chord_to_register(chord, PAD_LOW, PAD_HIGH)
+                pad_mid_note = pad_mid[len(pad_mid) // 2] if pad_mid else PAD_LOW
+                pad_chord = chord_wide_voicing(chord, pad_mid_note)
                 pad_dur = CHORD_DURATION_BARS * STEPS_PER_BAR
                 for midi_note in pad_chord:
                     osc_ph, il, ir, gn = init_supersaw(
@@ -1651,6 +1687,18 @@ def main() -> None:
             raw_lead_l, raw_lead_r = _render_accumulator(
                 lead_active, lead_cutoff, samples_per_step
             )
+            # Apply feedback delay before trance gate for spatial depth
+            _dw = _delay_write_pos
+            for _si in range(samples_per_step):
+                _dr = (_dw - _delay_samples + _si) % _delay_samples
+                _echo_l = _delay_buf_l[_dr]
+                _echo_r = _delay_buf_r[_dr]
+                _wi = (_dw + _si) % _delay_samples
+                _delay_buf_l[_wi] = float(raw_lead_l[_si]) + _echo_l * _DELAY_FEEDBACK
+                _delay_buf_r[_wi] = float(raw_lead_r[_si]) + _echo_r * _DELAY_FEEDBACK
+                raw_lead_l[_si] = raw_lead_l[_si] * (1.0 - _DELAY_MIX) + _echo_l * _DELAY_MIX
+                raw_lead_r[_si] = raw_lead_r[_si] * (1.0 - _DELAY_MIX) + _echo_r * _DELAY_MIX
+            _delay_write_pos = (_delay_write_pos + samples_per_step) % _delay_samples
             lead_l, lead_r = apply_tgate(
                 raw_lead_l * state.lead_gain,
                 raw_lead_r * state.lead_gain,
