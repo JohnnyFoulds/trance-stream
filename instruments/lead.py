@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-"""SA's acid lead instrument — supersaw + brown-noise FM through acidenv → trancegate → delay."""
+"""SA's acid lead instrument — supersaw + sine-FM through acidenv → trancegate → delay."""
 
 from __future__ import annotations
 
@@ -13,12 +13,13 @@ class AcidLead:
     """SA's lead instrument.
 
     Signal chain (SA's exact confirmed order):
-    supersaw(saw_count=3, detune=0.3) + brown_noise_FM → lpenv → acidenv → trancegate → FeedbackDelay
+    supersaw(saw_count=3, detune=0.3) + sine-FM → lpenv → acidenv → trancegate → FeedbackDelay
 
     Key facts (from docs/music_theory/02_sa_vocabulary_codified.md):
     - Uses acidenv (fast 3ms attack, 120ms decay) — NOT lpenv alone
     - FeedbackDelay wet=0.7, feedback=0.8, delay_s=0.375 (3/8 note at 140BPM)
-    - Brown noise added to FM: fm_depth=0 until bar 96, then ramps to 0.55
+    - Sine FM modulates carrier phase by sin(2π·mod_freq·t), adding sidebands
+      at carrier ± n·mod_freq; fm_depth=0 until bar 96, then ramps to 0.55
     - Gain: GAIN_LEAD = 0.70
     """
 
@@ -54,7 +55,9 @@ class AcidLead:
         cutoff_slider : float, optional
             rlpf slider override; if None uses the instance value.
         fm_depth : float
-            Brown-noise FM amount. 0.0 at session start, ramps to 0.55 after bar 96.
+            Sine-FM modulation index. 0.0 at session start, ramps to 0.55 after
+            bar 96. Modulator at ~0.5× carrier frequency; creates sidebands in
+            the 2k–8k range when carrier is 200–400 Hz.
         gain : float, optional
             Output gain override; if None uses the instance value.
 
@@ -62,7 +65,7 @@ class AcidLead:
         -------
         (buf_l, buf_r) : tuple of float32 ndarray, shape (n_samples,)
         """
-        from synth.oscillators import supersaw, brown_noise
+        from synth.oscillators import supersaw
         from synth.filters import lpf, rlpf_to_hz
         from synth.envelopes import acidenv, trancegate
         from song.theory import (TRANCEGATE_SPEED, TRANCEGATE_AMOUNT,
@@ -81,16 +84,27 @@ class AcidLead:
         buf_r = np.zeros(n_samples, dtype=np.float32)
         n_notes = len(midi_notes)
 
+        t = np.arange(n_samples, dtype=np.float64) / self.sr
+
         for note in midi_notes:
             note = max(0, min(127, int(note)))
             l, r, _ = supersaw(note, n_samples, self.sr,
                                 saw_count=3, detune_cents=30.0)
-            # Brown-noise FM: additive noise scaled by fm_depth.
-            # fm_depth=0 early session; ramps to 0.55 after bar 96.
             if fm_depth > 0.0:
-                noise = brown_noise(n_samples, self._rng) * (fm_depth * 0.3)
-                l = l + noise
-                r = r + noise
+                # True phase-modulation FM: modulator at 4× carrier frequency creates
+                # sidebands at carrier ± n·mod_freq landing prominently in 2k-8k Hz
+                # (e.g. carrier=262 Hz, mod=1048 Hz → sideband n=2: 2358 Hz).
+                # FM voice is ADDED to (not replacing) the supersaw so high harmonics
+                # from the supersaw are preserved.  mod_index scales with fm_depth.
+                carrier_freq = 440.0 * 2.0 ** ((note - 69) / 12.0)
+                mod_freq  = carrier_freq * 4.0
+                mod_index = fm_depth * 4.0      # index 0 → 1.65 at max fm_depth
+                phase_mod = mod_index * np.sin(2.0 * np.pi * mod_freq * t)
+                fm_voice  = (np.sin(2.0 * np.pi * carrier_freq * t + phase_mod)
+                              .astype(np.float32))
+                # Add FM voice at 30% weight to enrich harmonics without obscuring the saw
+                l = (l + fm_voice * 0.3).astype(np.float32)
+                r = (r + fm_voice * 0.3).astype(np.float32)
             buf_l += l / n_notes
             buf_r += r / n_notes
 

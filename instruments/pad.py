@@ -70,34 +70,50 @@ class SupersawPad:
         buf_l = np.zeros(n_samples, dtype=np.float32)
         buf_r = np.zeros(n_samples, dtype=np.float32)
 
-        # Expand notes with voicing offsets
-        all_notes = []
+        # Expand notes with voicing offsets and their gain weights.
+        # Sub-bass doublings (-14, -21 semitones) are quieter than the root voice
+        # so they add weight without dominating the spectral centroid.
+        # Gain weights: root=1.0, -14 semitone doubling=0.35, -21 semitone=0.15
+        # Source: docs/music_theory/02_sa_vocabulary_codified.md §1
+        VOICING_GAINS = [1.0, 0.35, 0.15]
+        all_notes   = []
+        voice_gains = []
         for note in midi_notes:
-            for offset in PAD_VOICING_OFFSETS:
+            for offset, vg in zip(PAD_VOICING_OFFSETS, VOICING_GAINS):
                 all_notes.append(note + offset)
+                voice_gains.append(vg)
 
         if not all_notes:
             return buf_l, buf_r
 
-        # Initialise or resize phase state to match voice count
         n_voices = len(all_notes)
         if self._osc_phases is None or len(self._osc_phases) != n_voices:
             self._osc_phases = np.zeros(n_voices, dtype=np.float64)
 
-        # Render each note as a supersaw voice and accumulate
-        for i, note in enumerate(all_notes):
+        # Normalise by the root voice weight only (not total_weight) so that
+        # the root voice has unity gain and sub-bass doublings add at their
+        # fractional weights — this preserves the original signal amplitude
+        # rather than dividing by 1.5 which silences the pad by 1/1.5.
+        root_gain = voice_gains[0]  # always 1.0
+        for i, (note, vg) in enumerate(zip(all_notes, voice_gains)):
             note = max(0, min(127, note))
             l, r, new_phases = supersaw(note, n_samples, self.sr,
                                         saw_count=5, detune_cents=60.0,
                                         osc_phases=self._osc_phases[i:i + 1].repeat(5))
-            self._osc_phases[i] = new_phases[2]  # centre voice (index saw_count//2)
-            buf_l += l / n_voices
-            buf_r += r / n_voices
+            self._osc_phases[i] = new_phases[2]
+            buf_l += l * vg
+            buf_r += r * vg
 
-        # LP filter sweep driven by lpenv — 8 stepped segments
-        env = lpenv(n_samples, self.sr, amount=2.0, decay_s=0.3)
-        base_hz = cutoff * 0.3
-        peak_hz = cutoff
+        # LP filter sweep driven by lpenv — 8 stepped segments.
+        # Strudel lpenv(2) semantics: filter rests at slider value and opens
+        # 2 octaves (4×) upward on each note trigger, then decays back.
+        # lpenv returns values scaled by amount/9.0 (peak ≈ 0.222 for amount=2);
+        # normalise to [0,1] by dividing by that scale factor.
+        amount = 2.0
+        env = lpenv(n_samples, self.sr, amount=amount, decay_s=0.3)
+        env_01_scale = amount / 9.0          # peak value of lpenv output
+        base_hz = cutoff                     # resting cutoff = slider value
+        peak_hz = cutoff * 4.0              # 2 octaves above base at trigger
         seg_len = n_samples // 8
         zi_l = None
         zi_r = None
@@ -105,8 +121,8 @@ class SupersawPad:
             s = seg * seg_len
             e = s + seg_len if seg < 7 else n_samples
             mid = s + (e - s) // 2
-            env_val = float(env[mid])
-            seg_cutoff = base_hz + (peak_hz - base_hz) * env_val
+            env_01 = min(float(env[mid]) / env_01_scale, 1.0)
+            seg_cutoff = base_hz + (peak_hz - base_hz) * env_01
             seg_cutoff = max(50.0, min(seg_cutoff, self.sr * 0.45))
             buf_l[s:e], zi_l = lpf(buf_l[s:e], seg_cutoff, self.sr, zi_l)
             buf_r[s:e], zi_r = lpf(buf_r[s:e], seg_cutoff, self.sr, zi_r)
