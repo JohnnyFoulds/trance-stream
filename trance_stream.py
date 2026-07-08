@@ -747,33 +747,30 @@ def select_lead_note(
     :param step_in_bar: 0-based step index within bar (0-15).
     :returns: MIDI note in ``[LEAD_LOW, LEAD_HIGH]``, or ``None`` (hold).
     """
-    if step_in_bar != 0:
+    # Lead fires ONCE per chord block (every CHORD_DURATION_BARS bars) and
+    # holds for the full block. The trance gate creates all rhythmic movement.
+    # step_in_bar is pre-advance_engine; check it is bar-start AND chord-start.
+    # The chord boundary is checked via step_in_bar == 0 combined with the
+    # caller having already confirmed we are at a chord boundary (is_chord_boundary).
+    # We reuse the same is_chord_boundary the pad uses, passed via step context.
+    # Simplest: check step_in_bar == 0 and (state.step - 1) is chord-aligned
+    # (state.step was incremented by advance_engine before this call).
+    chord_steps = CHORD_DURATION_BARS * STEPS_PER_BAR
+    pre_advance_step = state.step - 1   # step value when note-select was triggered
+    if not (step_in_bar == 0 and pre_advance_step % chord_steps == 0):
         return None
 
     pool = chord_to_register(chord, LEAD_LOW, LEAD_HIGH)
     if not pool:
         return None
 
-    # Phrase position: which of the 4 bars in the current phrase are we on?
-    # bar_note_count is reset every bar, so we derive from the global step counter.
-    phrase_bar = (state.step // STEPS_PER_BAR) % 4
-    ca_variant = state.ca_row[PHRASE_BIT]
-
-    # Anchor: nearest pool note to previous pitch (voice-leading across chords)
+    # Pick nearest chord tone to previous note for smooth voice-leading.
     if state.prev_lead_note is not None:
-        anchor = min(range(len(pool)), key=lambda i: abs(pool[i] - state.prev_lead_note))
+        idx = min(range(len(pool)), key=lambda i: abs(pool[i] - state.prev_lead_note))
     else:
-        anchor = len(pool) // 2
+        idx = len(pool) // 2
 
-    # Within a 4-bar phrase apply a gentle contour (±1 step in pool)
-    if ca_variant == 0:
-        offsets = [0, 1, 1, 0]    # slight rise then return
-    else:
-        offsets = [0, 0, -1, 0]   # slight dip on bar 3
-
-    idx = max(0, min(len(pool) - 1, anchor + offsets[phrase_bar]))
     note = pool[idx]
-
     _update_lead_state(state, note, state.prev_lead_note)
     return note
 
@@ -1711,11 +1708,11 @@ def main() -> None:
                             gain=gn, midi_note=stacked,
                             saw_count=SAW_COUNT_LEAD,
                             detune_cents=DETUNE_CENTS_LEAD,
-                            steps_remaining=STEPS_PER_BAR,
+                            steps_remaining=chord_steps,
                         ))
                         midi.addNote(
                             0, 0, stacked, beat_time,
-                            STEPS_PER_BAR * STEP_BEATS, vel
+                            chord_steps * STEP_BEATS, vel
                         )
 
             # h. Arp
