@@ -175,14 +175,15 @@ def _rlpf_to_hz(slider: float) -> float:
     return v ** 4.0
 
 def filter_cutoff_arc(bar: int) -> float:
-    """rlpf slider arc: 0.40 → 0.88 over ~128 bars, with two deliberate pullbacks.
+    """rlpf slider arc: 0.55 → 0.88 over ~128 bars, with two deliberate pullbacks.
     Research: gradual opening with pullbacks at ~bar 32 and ~bar 77.
+    Floor raised to 0.55 (≈2.8 kHz) so pad/lead are audible from the start.
     """
     t = min(bar / 128.0, 1.0)
-    base = 0.40 + 0.48 * t
-    pb1 = 0.15 * math.exp(-((t - 0.25) ** 2) / 0.002)   # pullback ~bar 32
-    pb2 = 0.20 * math.exp(-((t - 0.60) ** 2) / 0.003)   # pullback ~bar 77
-    slider = max(0.30, min(0.90, base - pb1 - pb2))
+    base = 0.55 + 0.33 * t
+    pb1 = 0.12 * math.exp(-((t - 0.25) ** 2) / 0.002)   # pullback ~bar 32
+    pb2 = 0.16 * math.exp(-((t - 0.60) ** 2) / 0.003)   # pullback ~bar 77
+    slider = max(0.48, min(0.90, base - pb1 - pb2))
     return _rlpf_to_hz(slider)
 
 def fm_depth_arc(bar: int) -> float:
@@ -231,8 +232,8 @@ DETUNE_CENTS = 60.0
 # lpenv(2) sweeps the filter briefly on each note trigger.
 PAD_CUTOFF_BASE:  float = 12000.0
 LEAD_CUTOFF_BASE: float = 9700.0
-LPENV_DURATION_S: float = 0.08    # 80 ms sweep up from low cutoff
-LPENV_START_HZ:   float = 400.0   # filter starts here, sweeps to base cutoff
+LPENV_DURATION_S: float = 0.06    # 60 ms sweep
+LPENV_START_HZ:   float = 1200.0  # filter starts here, sweeps to base cutoff
 
 # Trancegate — smooth cosine envelope, non-integer cycle rate.
 # Research: trancegate(1.5, 45, 1).
@@ -242,8 +243,9 @@ TGATE_DUTY:  float = 0.5    # open fraction per cycle (angle=45° ≈ 50%)
 
 # Acidenv — fast attack, shaped decay.  Applied to every note trigger.
 # Research: .acidenv(slider) where slider ≈ 0.5–0.7 in most frames.
+# Decay raised to 200ms base so notes have presence before delay fills the gap.
 ACIDENV_ATTACK_S: float = 0.003    # 3ms
-ACIDENV_DECAY_S:  float = 0.10     # 100ms (can be modulated)
+ACIDENV_DECAY_S:  float = 0.20     # 200ms base (modulated by arc)
 
 # Lead FM brown noise.  Research: .fm(.5).fmwave("brown").
 # Implemented as brown noise phase modulation with depth 0.5.
@@ -255,20 +257,22 @@ LEAD_DELAY_WET:      float = 0.70
 LEAD_DELAY_FEEDBACK: float = 0.80
 _delay_time_steps    = 4   # quarter note
 
-# Voice levels (pre-limiter trim)
-KICK_LEVEL:  float = 1.00
-HIHAT_LEVEL: float = 0.55
-CLAP_LEVEL:  float = 0.65
-PAD_LEVEL:   float = 1.10
-LEAD_LEVEL:  float = 0.80
-PULSE_LEVEL: float = 0.12
+# Voice levels (pre-limiter trim).
+# Kick dominated the mix at 1.0 — pad/lead were inaudible.
+# Target: kick ~25% of mix energy, pad+lead ~55%, drums ~20%.
+KICK_LEVEL:  float = 0.40
+HIHAT_LEVEL: float = 0.35
+CLAP_LEVEL:  float = 0.45
+PAD_LEVEL:   float = 1.40
+LEAD_LEVEL:  float = 1.20
+PULSE_LEVEL: float = 0.18
 
 # Sidechain.  Research: .duck("3:4:5") → pad and lead duck on kick.
-SIDECHAIN_DEPTH:   float = 0.04
+SIDECHAIN_DEPTH:   float = 0.08
 SIDECHAIN_STEPS:   int   = 6     # recover over ~0.4 beat
 
-# Master
-DRIVE: float = 2.5   # soft-clip drive
+# Master — lower drive so voices other than kick have headroom.
+DRIVE: float = 1.4
 
 # Notearp for lead — 16-step pattern of chord-tone indices (0,1,2) or -1=rest.
 # Derived from "< <- - - -> 0 1@2 0 1 0 1>*16" in Coding Trance IV.
