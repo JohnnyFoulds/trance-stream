@@ -47,10 +47,10 @@ def main():
                         help="Tempo in BPM (default: 140)")
     parser.add_argument("--bars",    type=int,   default=128,
                         help="Number of bars to render (default: 128)")
-    parser.add_argument("--wav",     default="/tmp/trance_v3.wav",
-                        help="Output WAV path (default: /tmp/trance_v3.wav)")
-    parser.add_argument("--out-midi", "-o", default="/tmp/trance_v3.mid",
-                        help="Output MIDI path (default: /tmp/trance_v3.mid)")
+    parser.add_argument("--wav",     default=None,
+                        help="Output WAV path (default: /tmp/trance_v3.wav when not streaming)")
+    parser.add_argument("--out-midi", "-o", default=None,
+                        help="Output MIDI path (default: /tmp/trance_v3.mid when not streaming)")
     parser.add_argument("--volume",  type=float, default=1.0,
                         help="Master volume 0.0–1.0 (default: 1.0)")
     parser.add_argument("--analyse", action="store_true",
@@ -83,8 +83,12 @@ def main():
     from song.renderer import SongRenderer
     renderer = SongRenderer(song)
 
+    # Resolve default paths only when not streaming (stream mode: no files unless requested)
+    wav_path  = args.wav  or (None if args.stream else "/tmp/trance_v3.wav")
+    midi_path = args.out_midi or (None if args.stream else "/tmp/trance_v3.mid")
+
     if args.stream:
-        buf_l, buf_r = _stream_bars(renderer, args.bars, args.volume, args.wav)
+        buf_l, buf_r = _stream_bars(renderer, args.bars, args.volume, wav_path)
     else:
         print(f"Rendering {args.bars} bars...")
         buf_l, buf_r = renderer.render_bars(args.bars)
@@ -99,75 +103,80 @@ def main():
               f"({dur_s/elapsed:.1f}× realtime)")
         print(f"  Peak level: {max(abs(buf_l).max(), abs(buf_r).max()):.4f}")
 
-        # Write WAV (stream mode writes bar-by-bar, so skip here)
-        print(f"Writing WAV → {args.wav}")
-        renderer.write_wav(args.wav)  # no-op check: only reached when not streaming
+        print(f"Writing WAV → {wav_path}")
+        renderer.write_wav(wav_path)
 
-    # Write MIDI
-    print(f"Writing MIDI → {args.out_midi}")
-    try:
-        renderer.write_midi(args.out_midi)
-    except ImportError as e:
-        print(f"  (skipped: {e})")
+    # Write MIDI (only if a path is set)
+    if midi_path:
+        print(f"Writing MIDI → {midi_path}")
+        try:
+            renderer.write_midi(midi_path)
+        except ImportError as e:
+            print(f"  (skipped: {e})")
 
     # Optional analysis
     if args.analyse:
-        print("\nRunning analysis...")
-        try:
-            sys.path.insert(0, str(REPO_ROOT / "tools"))
-            from analyse_audio import analyse_wav, quality_warnings
-            from spectrogram import analyse_spectrum
-            import wave as _wave
-            import numpy as _np
+        if not wav_path:
+            print("\nAnalysis skipped — no WAV file (use --wav to save one).")
+        else:
+            print("\nRunning analysis...")
+            try:
+                sys.path.insert(0, str(REPO_ROOT / "tools"))
+                from analyse_audio import analyse_wav, quality_warnings
+                from spectrogram import analyse_spectrum
+                import wave as _wave
+                import numpy as _np
 
-            wav_stats  = analyse_wav(args.wav)
-            spec_stats = analyse_spectrum(args.wav)
-            print(f"  Crest factor:     {wav_stats['crest_factor_mean']:.2f} "
-                  f"(target 3–8)")
-            print(f"  Spectral centroid:{spec_stats['mean_centroid_hz']:.0f} Hz "
-                  f"(full render avg; SA ref 425–929 Hz at t=90s)")
-            print(f"  Brightness:       {spec_stats['brightness_score']:.2%} "
-                  f"(full render avg; SA ref 2.3–4.8% at t=90s)")
+                wav_stats  = analyse_wav(wav_path)
+                spec_stats = analyse_spectrum(wav_path)
+                print(f"  Crest factor:     {wav_stats['crest_factor_mean']:.2f} "
+                      f"(target 3–8)")
+                print(f"  Spectral centroid:{spec_stats['mean_centroid_hz']:.0f} Hz "
+                      f"(full render avg; SA ref 425–929 Hz at t=90s)")
+                print(f"  Brightness:       {spec_stats['brightness_score']:.2%} "
+                      f"(full render avg; SA ref 2.3–4.8% at t=90s)")
 
-            # Late-bars analysis: last 12 bars (approximately t=90s equivalent)
-            with _wave.open(args.wav) as wf:
-                sr_wav  = wf.getframerate()
-                n_total = wf.getnframes()
-                spb_wav = int(sr_wav * 4 * 60 / renderer.song.bpm)
-                n_late  = min(12 * spb_wav, n_total // 4)
-                wf.setpos(n_total - n_late)
-                raw = wf.readframes(n_late)
-            samples = _np.frombuffer(raw, dtype=_np.int16).reshape(-1, 2)
-            late_l  = samples[:, 0].astype(_np.float32) / 32767.0
-            spec    = _np.abs(_np.fft.rfft(late_l * _np.hanning(len(late_l))))
-            freqs   = _np.fft.rfftfreq(len(late_l), 1.0 / sr_wav)
-            pw      = spec ** 2
-            late_centroid  = float((freqs * pw).sum() / pw.sum()) if pw.sum() > 0 else 0
-            late_brightness = float(pw[freqs >= 1500].sum() / pw.sum()) if pw.sum() > 0 else 0
-            print(f"  Late centroid:    {late_centroid:.0f} Hz "
-                  f"(last 12 bars; SA ref 425–929 Hz)")
-            print(f"  Late brightness:  {late_brightness:.2%} "
-                  f"(last 12 bars; SA ref 2.3–4.8%)")
+                with _wave.open(wav_path) as wf:
+                    sr_wav  = wf.getframerate()
+                    n_total = wf.getnframes()
+                    spb_wav = int(sr_wav * 4 * 60 / renderer.song.bpm)
+                    n_late  = min(12 * spb_wav, n_total // 4)
+                    wf.setpos(n_total - n_late)
+                    raw = wf.readframes(n_late)
+                samples = _np.frombuffer(raw, dtype=_np.int16).reshape(-1, 2)
+                late_l  = samples[:, 0].astype(_np.float32) / 32767.0
+                spec    = _np.abs(_np.fft.rfft(late_l * _np.hanning(len(late_l))))
+                freqs   = _np.fft.rfftfreq(len(late_l), 1.0 / sr_wav)
+                pw      = spec ** 2
+                late_centroid   = float((freqs * pw).sum() / pw.sum()) if pw.sum() > 0 else 0
+                late_brightness = float(pw[freqs >= 1500].sum() / pw.sum()) if pw.sum() > 0 else 0
+                print(f"  Late centroid:    {late_centroid:.0f} Hz "
+                      f"(last 12 bars; SA ref 425–929 Hz)")
+                print(f"  Late brightness:  {late_brightness:.2%} "
+                      f"(last 12 bars; SA ref 2.3–4.8%)")
 
-            warnings = quality_warnings(wav_stats, {})
-            for w in warnings:
-                print(f"  ⚠  {w}")
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            print(f"  Analysis failed: {e}")
+                warnings = quality_warnings(wav_stats, {})
+                for w in warnings:
+                    print(f"  ⚠  {w}")
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                print(f"  Analysis failed: {e}")
 
     # Optional spectrogram
     if args.spectrogram:
-        png_path = str(Path(args.wav).with_suffix(".png"))
-        print(f"\nGenerating spectrogram → {png_path}")
-        try:
-            sys.path.insert(0, str(REPO_ROOT / "tools"))
-            from spectrogram import generate_spectrogram
-            generate_spectrogram(args.wav, png_path,
-                                  title=f"trance_stream_v3 — {args.seed} / {args.mood}")
-            print(f"  Saved: {png_path}")
-        except Exception as e:
-            print(f"  Spectrogram failed: {e}")
+        if not wav_path:
+            print("\nSpectrogram skipped — no WAV file (use --wav to save one).")
+        else:
+            png_path = str(Path(wav_path).with_suffix(".png"))
+            print(f"\nGenerating spectrogram → {png_path}")
+            try:
+                sys.path.insert(0, str(REPO_ROOT / "tools"))
+                from spectrogram import generate_spectrogram
+                generate_spectrogram(wav_path, png_path,
+                                     title=f"trance_stream_v3 — {args.seed} / {args.mood}")
+                print(f"  Saved: {png_path}")
+            except Exception as e:
+                print(f"  Spectrogram failed: {e}")
 
     # Optional post-render playback (--play, not --stream)
     if args.play and not args.stream:
