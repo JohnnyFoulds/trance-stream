@@ -12,6 +12,10 @@ Key invariants verified:
 3. No files are created when no paths are passed.
 4. Files are created only when paths are explicitly provided.
 5. Partial stream (KeyboardInterrupt mid-way) returns clean partial audio.
+6. stream.write() is called once per bar (no merged/split writes that would
+   cause silence gaps between bars on real hardware).
+7. OutputStream is created WITHOUT a large blocksize (blocksize=spb would
+   cause underruns — PortAudio would silence-fill before the next bar arrives).
 """
 
 from __future__ import annotations
@@ -68,6 +72,61 @@ def _mock_sd(fake_stream: _FakeStream):
     sd = mock.MagicMock()
     sd.OutputStream.return_value = fake_stream
     return sd
+
+
+def _captured_outputstream_kwargs(fake_stream: _FakeStream, mock_sd) -> dict:
+    """Return the kwargs passed to sd.OutputStream(...)."""
+    return mock_sd.OutputStream.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
+# OutputStream configuration — these catch the silence-between-bars bug
+# ---------------------------------------------------------------------------
+
+def test_outputstream_not_created_with_large_blocksize():
+    """OutputStream must NOT be created with blocksize=spb.
+
+    With blocksize=spb PortAudio drains its buffer then silence-fills while
+    the next bar is being rendered — audible as a split-second of silence
+    between every bar.  The fix is to omit blocksize (defaults to ~10ms)
+    so stream.write() blocks until data is consumed.
+    """
+    from trance_stream_v3 import _stream_bars
+
+    renderer, _ = _make_renderer('sunrise', n_bars=2)
+    mock_sd = _mock_sd(_FakeStream())
+    fake_stream = mock_sd.OutputStream.return_value
+
+    with mock.patch.dict('sys.modules', {'sounddevice': mock_sd}):
+        _stream_bars(renderer, 2, volume=1.0, wav_path=None)
+
+    kwargs = mock_sd.OutputStream.call_args.kwargs
+    blocksize = kwargs.get('blocksize', None)
+    # Either not passed at all, or explicitly 0 (PortAudio default).
+    assert blocksize is None or blocksize == 0, (
+        f"OutputStream created with blocksize={blocksize}. "
+        f"A large blocksize causes silence gaps between bars — must be 0 or omitted."
+    )
+
+
+def test_stream_write_called_once_per_bar():
+    """stream.write() must be called exactly once per bar.
+
+    Multiple write() calls per bar would break timing. Merging bars into a
+    single write() would delay the start of audio by the full render time.
+    """
+    from trance_stream_v3 import _stream_bars
+
+    n_bars = 4
+    renderer, _ = _make_renderer('sunrise', n_bars=n_bars)
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer, n_bars, volume=1.0, wav_path=None)
+
+    assert len(fake_stream.blocks) == n_bars, (
+        f"stream.write() called {len(fake_stream.blocks)} times for {n_bars} bars. "
+        f"Must be called exactly once per bar."
+    )
 
 
 # ---------------------------------------------------------------------------

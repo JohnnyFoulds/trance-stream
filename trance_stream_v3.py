@@ -234,8 +234,11 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
         wav_file.setsampwidth(2)
         wav_file.setframerate(sr)
 
-    stream = sd.OutputStream(samplerate=sr, channels=2, dtype='float32',
-                              blocksize=spb)
+    # blocksize=0 → PortAudio default (~10ms). stream.write() blocks until
+    # the data is consumed, providing natural backpressure. A large blocksize
+    # (e.g. spb=75600) causes underruns: PortAudio drains the buffer and
+    # produces silence before the next bar is ready.
+    stream = sd.OutputStream(samplerate=sr, channels=2, dtype='float32')
     stream.start()
     print(f"Streaming {n_bars} bars in real time — Ctrl-C to stop.")
 
