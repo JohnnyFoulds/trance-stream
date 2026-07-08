@@ -4,3 +4,8 @@ __pycache__/
 *.wav
 *.mid
 .DS_Store
+
+# Research: raw video files are large — not committed
+# Extracted text (code.jsonl, summary.md) and analysis ARE committed
+research/videos/
+research/extracted/*/raw_frames/

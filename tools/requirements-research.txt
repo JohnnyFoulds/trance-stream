@@ -1,0 +1,14 @@
+# Research pipeline dependencies
+# Install: pip install -r tools/requirements-research.txt
+# System deps (macOS): brew install tesseract ffmpeg
+# System deps (Linux): apt install tesseract-ocr ffmpeg
+
+opencv-python>=4.8.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+numpy>=1.24.0
+yt-dlp>=2024.1.0
+
+# Core generator deps (already in main requirements)
+# sounddevice
+# midiutil
