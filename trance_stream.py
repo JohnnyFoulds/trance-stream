@@ -97,10 +97,10 @@ CA_WIDTH: int = 32
 # Register boundaries (MIDI note numbers)
 BASS_LOW: int = 36    # C2
 BASS_HIGH: int = 60   # C4
-LEAD_LOW: int = 62    # D4  — lead lives in one warm mid octave
-LEAD_HIGH: int = 74   # D5  — never goes piercing high
-ARP_LOW: int = 48     # C3  — arp lives below the lead
-ARP_HIGH: int = 62    # D4
+LEAD_LOW: int = 60    # C4  — expanded to two octaves for melodic range
+LEAD_HIGH: int = 84   # C6
+ARP_LOW: int = 72     # C5  — arp soars above the lead (trance convention)
+ARP_HIGH: int = 96    # C7
 PAD_LOW: int = 60     # C4 — keep pad above bass register
 PAD_HIGH: int = 79    # G5
 
@@ -130,7 +130,7 @@ CHORD_DURATION_BARS: int = 4
 SAW_COUNT_LEAD: int = 7
 SAW_COUNT_BASS: int = 3
 SAW_COUNT_PAD: int = 7
-DETUNE_CENTS_LEAD: float = 50.0
+DETUNE_CENTS_LEAD: float = 120.0   # ~20 cents per pair across 7 saws — wide chorus
 DETUNE_CENTS_BASS: float = 8.0
 DETUNE_CENTS_PAD: float = 20.0
 
@@ -151,7 +151,7 @@ ARP_CUTOFF_HZ: float = 4500.0   # tame harshness without killing the sheen
 
 # Sidechain (starter values; tune by ear)
 SIDECHAIN_DEPTH: float = 0.05  # duck bass/pad almost to silence on kick hit
-SIDECHAIN_RELEASE: int = 12    # recover over ~0.75 beats — classic trance pumping
+SIDECHAIN_RELEASE: int = 7     # recover in ~0.4 beat — perceptible pump at 140 BPM
 
 # Trance gate
 TGATE_SEEDS: list[int] = [
@@ -162,14 +162,14 @@ TGATE_ATTENUATION: float = 0.0   # fully mute closed slots (not just attenuate)
 TGATE_RAMP_MS: float = 8.0      # 8ms ramp removes clicks without blurring the gate
 
 # Filter LFO
-LEAD_CUTOFF_BASE: float = 12000.0
-LEAD_CUTOFF_SWEEP: float = 4000.0
+LEAD_CUTOFF_BASE: float = 3500.0   # LFO audible; sweeps 1500–5500 Hz
+LEAD_CUTOFF_SWEEP: float = 2000.0
 LEAD_LFO_RATE: float = 0.15
 BASS_CUTOFF_BASE: float = 900.0
 BASS_CUTOFF_SWEEP: float = 400.0
 BASS_LFO_RATE: float = 0.08
-PAD_CUTOFF_BASE: float = 1200.0
-PAD_CUTOFF_SWEEP: float = 600.0
+PAD_CUTOFF_BASE: float = 600.0    # warm, muffled — sits behind the lead
+PAD_CUTOFF_SWEEP: float = 300.0
 PAD_LFO_RATE: float = 0.05
 
 # Soft-clip drive (tune by ear)
@@ -1158,6 +1158,34 @@ def apply_sidechain(
     return buffer_l * sidechain_env, buffer_r * sidechain_env
 
 
+# --- REVERB ---
+
+_REVERB_DELAYS: list[int] = [1847, 1699, 2053, 2251]  # prime-length FDN delay lines
+_REVERB_FEEDBACK: float = 0.82
+
+
+class SimpleFDN:
+    """Minimal 4-channel Feedback Delay Network reverb (sample-by-sample)."""
+
+    def __init__(self) -> None:
+        self.bufs = [np.zeros(d, dtype=np.float32) for d in _REVERB_DELAYS]
+        self.pos   = [0] * 4
+
+    def process(self, x: np.ndarray, wet: float = 0.25) -> np.ndarray:
+        out = np.empty_like(x)
+        for s in range(len(x)):
+            outputs = [float(self.bufs[i][self.pos[i]]) for i in range(4)]
+            mixed   = (outputs[0] + outputs[1] + outputs[2] + outputs[3]) * 0.25
+            xf = float(x[s])
+            for i in range(4):
+                self.bufs[i][self.pos[i]] = np.float32(
+                    xf * 0.015 + mixed * _REVERB_FEEDBACK
+                )
+                self.pos[i] = (self.pos[i] + 1) % _REVERB_DELAYS[i]
+            out[s] = np.float32(xf * (1.0 - wet) + mixed * wet)
+        return out
+
+
 # --- NOTE ACCUMULATOR ---
 # ActiveNote and ArpNote dataclasses are defined in the GENERATIVE ENGINE
 # section above.  Accumulator lists are created and managed in the main loop.
@@ -1484,6 +1512,12 @@ def main() -> None:
         state.rng.randint(0, 2 ** 31)
     )
 
+    # Reverb instances — separate L/R so each channel has independent diffusion.
+    lead_reverb_l = SimpleFDN()
+    lead_reverb_r = SimpleFDN()
+    pad_reverb_l  = SimpleFDN()
+    pad_reverb_r  = SimpleFDN()
+
     # Lead feedback delay — matches Switch Angel's .delay(0.4) on the lead orbit.
     # Delay time: 0.4 × beat duration (i.e. a dotted-8th echo).
     # Feedback: 0.35 (decays quickly, adds spatial depth without muddying).
@@ -1719,6 +1753,9 @@ def main() -> None:
                 step_in_bar,
                 samples_per_step,
             )
+            _lead_wet = 0.35 if state.phase == "Breakdown" else 0.15
+            lead_l = lead_reverb_l.process(lead_l, wet=_lead_wet)
+            lead_r = lead_reverb_r.process(lead_r, wet=_lead_wet)
 
             arp_l, arp_r = _render_arp_accumulator(
                 arp_notes, samples_per_step
@@ -1739,6 +1776,9 @@ def main() -> None:
             pad_l, pad_r = apply_sidechain(
                 gated_pad_l, gated_pad_r, state.sidechain_env
             )
+            _pad_wet = 0.40 if state.phase == "Breakdown" else 0.25
+            pad_l = pad_reverb_l.process(pad_l, wet=_pad_wet)
+            pad_r = pad_reverb_r.process(pad_r, wet=_pad_wet)
 
             # k. Noise riser (Build-up only)
             voice_buffers: list[tuple[np.ndarray, np.ndarray]] = [
