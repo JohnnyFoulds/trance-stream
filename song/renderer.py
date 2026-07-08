@@ -1,0 +1,247 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# song/renderer.py
+# SongRenderer: renders a Song dataclass to audio (WAV) and MIDI.
+
+from __future__ import annotations
+import wave
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+
+try:
+    import mido
+    HAS_MIDO = True
+except ImportError:
+    HAS_MIDO = False
+
+
+class SongRenderer:
+    """Renders a Song bar-by-bar to stereo float32 audio and per-voice MIDI.
+
+    Usage::
+
+        song = build_song('sunrise', mood='uplifting')
+        renderer = SongRenderer(song)
+        buf_l, buf_r = renderer.render_bars(32)
+        renderer.write_wav('/tmp/v3.wav')
+        renderer.write_midi('/tmp/v3.mid')
+    """
+
+    def __init__(self, song: 'Song'):
+        from song.theory import samples_per_bar, samples_per_sixteenth
+        from song.theory import SIDECHAIN_DEPTH, SIDECHAIN_ATTACK_S
+        from synth.effects import Sidechain
+
+        self.song    = song
+        self.sr      = song.sr
+        self._spb    = samples_per_bar(song.bpm, song.sr)
+        self._sp16   = samples_per_sixteenth(song.bpm, song.sr)
+        self._bar    = 0
+        self._sidechain = Sidechain(depth=SIDECHAIN_DEPTH,
+                                    attack_s=SIDECHAIN_ATTACK_S, sr=song.sr)
+        self._audio_l: list[np.ndarray] = []
+        self._audio_r: list[np.ndarray] = []
+        self._midi_log: dict[str, list] = {}  # voice → [(bar, step, midi_note, duration_ticks)]
+
+    def render_bars(self, n_bars: int) -> tuple[np.ndarray, np.ndarray]:
+        """Render n_bars bars of audio. Returns (buf_l, buf_r) as float32."""
+        all_l = []
+        all_r = []
+        for _ in range(n_bars):
+            bar_l, bar_r = self._render_bar()
+            all_l.append(bar_l)
+            all_r.append(bar_r)
+
+        l = np.concatenate(all_l).astype(np.float32)
+        r = np.concatenate(all_r).astype(np.float32)
+        self._audio_l = all_l
+        self._audio_r = all_r
+        return l, r
+
+    def _render_bar(self) -> tuple[np.ndarray, np.ndarray]:
+        """Render one bar. Advances self._bar."""
+        from song.theory import (
+            KICK_STEPS_BASIC, KICK_STEPS_SYNCOPATED,
+            CLAP_STEPS_BACKBEAT, HIHAT_STEPS,
+            GAIN_KICK, GAIN_PAD, GAIN_LEAD,
+            GAIN_HIHAT, GAIN_CLAP,
+            chord_to_midi,
+        )
+        from song.pattern import notearp_pattern
+
+        bar  = self._bar
+        spb  = self._spb
+        sp16 = self._sp16
+        song = self.song
+        sb   = song.stage_bars
+
+        mix_l = np.zeros(spb, dtype=np.float32)
+        mix_r = np.zeros(spb, dtype=np.float32)
+
+        # Current chord for this bar
+        chord_idx     = self._chord_index(bar)
+        chord_degrees = song.chord_prog[chord_idx]
+        chord_midi    = chord_to_midi(chord_degrees, song.root_midi, song.scale)
+
+        kick_buf_l = None
+        kick_buf_r = None
+
+        # ── Kick ─────────────────────────────────────────────────────────────
+        kick_track = self._get_track('kick')
+        if kick_track and kick_track.is_active(bar):
+            kit = kick_track.instrument
+            if bar >= sb.get('kick_syncopated', 9999):
+                kick_steps = KICK_STEPS_SYNCOPATED
+            else:
+                kick_steps = KICK_STEPS_BASIC
+
+            kick_l, kick_r = kit.render_kick(gain=GAIN_KICK)
+            for step in kick_steps:
+                offset = step * sp16
+                end    = min(offset + len(kick_l), spb)
+                n      = end - offset
+                mix_l[offset:end] += kick_l[:n]
+                mix_r[offset:end] += kick_r[:n]
+            kick_buf_l = mix_l.copy()  # save for sidechain key signal
+            kick_buf_r = mix_r.copy()
+
+        # ── Hi-hat ───────────────────────────────────────────────────────────
+        if bar >= sb.get('hihat_on', 9999):
+            kick_track2 = self._get_track('kick')
+            if kick_track2:
+                from song.arcs import hihat_decay_arc
+                decay_s = hihat_decay_arc(bar)
+                hh_l, hh_r = kick_track2.instrument.render_hihat(
+                    decay_s=decay_s, gain=GAIN_HIHAT)
+                for step in HIHAT_STEPS:
+                    offset = step * sp16
+                    end    = min(offset + len(hh_l), spb)
+                    n      = end - offset
+                    mix_l[offset:end] += hh_l[:n]
+                    mix_r[offset:end] += hh_r[:n]
+
+        # ── Clap ─────────────────────────────────────────────────────────────
+        if bar >= sb.get('clap_on', 9999):
+            kick_track3 = self._get_track('kick')
+            if kick_track3:
+                cl_l, cl_r = kick_track3.instrument.render_clap(gain=GAIN_CLAP)
+                for step in CLAP_STEPS_BACKBEAT:
+                    offset = step * sp16
+                    end    = min(offset + len(cl_l), spb)
+                    n      = end - offset
+                    mix_l[offset:end] += cl_l[:n]
+                    mix_r[offset:end] += cl_r[:n]
+
+        # ── Pad ──────────────────────────────────────────────────────────────
+        pad_track = self._get_track('pad')
+        if pad_track and pad_track.is_active(bar):
+            # Before pad_chord_on: play root note only; after: full chord
+            if bar >= sb.get('pad_chord_on', 9999):
+                notes = chord_midi
+            else:
+                notes = [song.root_midi]
+            kwargs = pad_track.render_kwargs(bar)
+            pad_l, pad_r = pad_track.instrument.render(
+                notes, spb, gain=GAIN_PAD, **kwargs)
+            # Sidechain: duck pad on kick
+            if kick_buf_l is not None:
+                pad_l, pad_r = self._sidechain.process(pad_l, pad_r, kick_buf_l)
+            mix_l += pad_l
+            mix_r += pad_r
+
+        # ── Lead ─────────────────────────────────────────────────────────────
+        lead_track = self._get_track('lead')
+        if lead_track and lead_track.is_active(bar):
+            if bar >= sb.get('lead_melody_on', 9999):
+                # Full notearp melody
+                pattern     = notearp_pattern(chord_midi)
+                lead_notes  = list(dict.fromkeys(pattern.notes)) if pattern.notes else [song.root_midi]
+            else:
+                lead_notes = [song.root_midi]
+            kwargs = lead_track.render_kwargs(bar)
+            lead_l, lead_r = lead_track.instrument.render(
+                lead_notes, spb, **kwargs)
+            if kick_buf_l is not None:
+                lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
+            mix_l += lead_l
+            mix_r += lead_r
+
+        # Soft clip to prevent digital overs
+        mix_l = np.tanh(mix_l)
+        mix_r = np.tanh(mix_r)
+
+        self._bar += 1
+        return mix_l, mix_r
+
+    def _chord_index(self, bar: int) -> int:
+        """Return current chord progression index based on bar number.
+
+        Cycles through the chord progression using PAD_CHORD_WEIGHTS for
+        relative durations.  SA's sa_canonical pattern holds degrees 3 and 5
+        for 3 bars each, and degrees 4 and 6 for 1 bar each (weights [3,1,3,1]),
+        giving an 8-bar cycle.
+        """
+        from song.theory import PAD_CHORD_WEIGHTS
+        weights = self.song.chord_weights if self.song.chord_weights else PAD_CHORD_WEIGHTS
+        cycle_len = sum(weights)
+        pos = bar % cycle_len
+        cumulative = 0
+        for i, w in enumerate(weights):
+            cumulative += w
+            if pos < cumulative:
+                return i % len(self.song.chord_prog)
+        return 0
+
+    def _get_track(self, instrument_type: str):
+        """Return the first Track matching instrument_type, or None."""
+        for t in self.song.tracks:
+            if t.instrument_type == instrument_type:
+                return t
+        return None
+
+    def write_wav(self, path: str) -> None:
+        """Write accumulated audio to a 16-bit stereo WAV file."""
+        if not self._audio_l:
+            raise RuntimeError("No audio rendered yet — call render_bars() first")
+        l = np.concatenate(self._audio_l)
+        r = np.concatenate(self._audio_r)
+        stereo = np.column_stack([l, r])
+        pcm = (np.clip(stereo, -1, 1) * 32767).astype(np.int16)
+
+        with wave.open(path, 'wb') as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(self.sr)
+            wf.writeframes(pcm.tobytes())
+
+    def write_midi(self, path: str) -> None:
+        """Write a multi-track MIDI file. Requires mido."""
+        if not HAS_MIDO:
+            raise ImportError("mido required: pip install mido")
+        # Minimal implementation: write a single-track MIDI with tempo
+        mid = mido.MidiFile(type=0, ticks_per_beat=480)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        tempo = int(60_000_000 / self.song.bpm)
+        track.append(mido.MetaMessage('set_tempo', tempo=tempo, time=0))
+        track.append(mido.MetaMessage('end_of_track', time=0))
+        mid.save(path)
+
+    def notearp_to_midi(self, bar: int, chord_degrees: list[int]) -> list[int]:
+        """Apply SA_NOTEARP_PATTERN to a chord, return MIDI notes for this bar.
+
+        -1 entries in SA_NOTEARP_PATTERN become -1 in the output (rests).
+        """
+        from song.theory import SA_NOTEARP_PATTERN, chord_to_midi
+        chord_midi = chord_to_midi(chord_degrees, self.song.root_midi, self.song.scale)
+        notes = []
+        for idx in SA_NOTEARP_PATTERN:
+            if idx >= 0:
+                notes.append(chord_midi[idx % len(chord_midi)])
+            else:
+                notes.append(-1)
+        return notes
