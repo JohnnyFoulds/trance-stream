@@ -49,7 +49,115 @@ parser.add_argument("-v", "--volume", type=float, default=0.90)
 parser.add_argument("-o", "--out_midi", type=str, default=None)
 parser.add_argument("--bars", type=int, default=0)
 parser.add_argument("--wav", type=str, default=None)
+parser.add_argument("--mood", type=str, default="uplifting",
+                    choices=["uplifting", "dark", "acid", "progressive", "dreamy"])
 args = parser.parse_args()
+
+# ---------------------------------------------------------------------------
+# Song configuration — deterministic from seed + mood
+# ---------------------------------------------------------------------------
+
+_NOTEARP_VARIANTS: list[list[int]] = [
+    # Original — hits on beats 1,2,3,4 with leading eighth
+    [0, -1, -1, -1,  1,  0,  1, -1,  0, -1,  1,  0,  1, -1, -1, -1],
+    # More active — 6 hits per bar
+    [0, -1,  1, -1,  0,  1, -1,  1,  0, -1,  0, -1,  1,  0, -1,  1],
+    # Sparse — 4 hits, mostly on downbeats
+    [0, -1, -1, -1, -1, -1,  1, -1,  0, -1, -1, -1,  1, -1, -1, -1],
+    # Syncopated — kicks on the offbeats
+    [-1,  0, -1,  1, -1,  0, -1, -1, -1,  1, -1,  0, -1, -1,  1, -1],
+    # Dense triplet feel
+    [0,  1, -1,  0,  1, -1,  0,  1, -1,  0, -1,  1,  0,  1, -1, -1],
+]
+
+_SCALE_OFFSETS: dict[str, list[int]] = {
+    "uplifting":   [0, 2, 3, 5, 7, 8, 10],   # natural minor
+    "dark":        [0, 2, 3, 5, 7, 8, 10],   # natural minor, darker chord choices
+    "acid":        [0, 2, 3, 5, 7, 8, 10],   # natural minor
+    "progressive": [0, 2, 4, 5, 7, 9, 11],   # major — brighter
+    "dreamy":      [0, 2, 3, 5, 7, 9, 10],   # dorian — bittersweet
+}
+
+# Chord progressions as list of [root_deg, third_deg, fifth_deg] triples
+_CHORD_PROGS: dict[str, list[list[int]]] = {
+    "uplifting":   [[0, 2, 4], [5, 0, 2], [3, 5, 0], [4, 6, 1]],  # i → iv → III → v
+    "dark":        [[0, 2, 4], [5, 0, 2], [0, 2, 4], [6, 1, 3]],  # i → iv → i → viidim
+    "acid":        [[0, 2, 4], [3, 5, 0], [5, 0, 2], [3, 5, 0]],  # i → III → iv → III
+    "progressive": [[0, 2, 4], [3, 5, 0], [4, 6, 1], [1, 3, 5]],  # I → IV → V → ii
+    "dreamy":      [[0, 2, 4], [5, 0, 2], [1, 3, 5], [3, 5, 0]],  # i → iv → ii → III
+}
+
+_MOOD_NAMES: dict[str, str] = {
+    "uplifting":   "i-iv-III-v",
+    "dark":        "i-iv-i-viidim",
+    "acid":        "i-III-iv-III",
+    "progressive": "I-IV-V-ii",
+    "dreamy":      "i-iv-ii-III",
+}
+
+_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+@dataclass
+class SongConfig:
+    root_midi: int
+    scale_offsets: list[int]
+    chord_prog: list[list[int]]
+    notearp_pattern: list[int]
+    stage_jitter: dict[str, int]
+    filter_pb_bars: tuple[int, int]
+    tgate_density: float
+    # Derived display info
+    mood: str
+    seed: str
+    arp_variant: int
+
+
+def build_song_config(seed: str, mood: str) -> SongConfig:
+    """Compute deterministic song configuration from seed + mood."""
+    rng = random.Random(seed)
+
+    # Root: MD5 of seed → MIDI note C2(36)–B2(47)
+    root_midi = int(hashlib.md5(seed.encode()).hexdigest(), 16) % 12 + 36
+
+    scale_offsets = _SCALE_OFFSETS[mood]
+    chord_prog = _CHORD_PROGS[mood]
+
+    # Notearp pattern
+    arp_variant = rng.randint(0, len(_NOTEARP_VARIANTS) - 1)
+    notearp_pattern = _NOTEARP_VARIANTS[arp_variant]
+
+    # Stage jitter: ±4 bars, preserving ordering and minimum 0
+    # We'll apply clamping after computing raw offsets
+    raw_jitter: dict[str, int] = {}
+    for key in (
+        "kick_on", "pad_on", "lead_root_on", "lead_melody_on",
+        "pad_chord_on", "lead_voicing_on", "clap_on", "fm_on",
+        "pulse_on", "hihat_on", "kick_syncopated",
+    ):
+        raw_jitter[key] = rng.randint(-4, 4)
+
+    # Filter pullback positions
+    pb1 = rng.randint(20, 40)
+    pb2 = rng.randint(60, 85)
+    filter_pb_bars = (pb1, pb2)
+
+    # Tgate density
+    tgate_density = rng.uniform(0.65, 0.85)
+
+    return SongConfig(
+        root_midi=root_midi,
+        scale_offsets=scale_offsets,
+        chord_prog=chord_prog,
+        notearp_pattern=notearp_pattern,
+        stage_jitter=raw_jitter,
+        filter_pb_bars=filter_pb_bars,
+        tgate_density=tgate_density,
+        mood=mood,
+        seed=seed,
+        arp_variant=arp_variant,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Timing constants
@@ -66,23 +174,30 @@ steps_per_second: float = SAMPLE_RATE / samples_per_step
 # ---------------------------------------------------------------------------
 # Scale / music theory
 # ---------------------------------------------------------------------------
-# Root always G minor (as per Switch Angel's setScale("g:minor")).
-# We build a G natural minor scale and quantize all notes to it.
+# Root and scale are determined by SongConfig (seed + mood).
+# Helper functions accept scale_offsets and root_midi as parameters so they
+# work with any config; default arguments kept for backwards compatibility.
 
-_G_NATURAL_MINOR = [0, 2, 3, 5, 7, 8, 10]   # semitone offsets from G
+def scale_degree_to_midi(degree: int, root_midi: int = 55,
+                          scale_offsets: Optional[list[int]] = None) -> int:
+    """Map a scale degree (0-indexed, unbounded) to a MIDI note.
 
-def scale_degree_to_midi(degree: int, root_midi: int = 55) -> int:
-    """Map a scale degree (0-indexed, unbounded) to a MIDI note in G minor.
-    root_midi 55 = G3.
+    scale_offsets: semitone intervals of the scale (7 values).
+    root_midi: MIDI root of the scale.
     """
+    if scale_offsets is None:
+        scale_offsets = [0, 2, 3, 5, 7, 8, 10]  # natural minor fallback
     octave, step = divmod(degree, 7)
-    return root_midi + octave * 12 + _G_NATURAL_MINOR[step]
+    return root_midi + octave * 12 + scale_offsets[step]
 
 
-def quantize_to_scale(midi: int, root: int = 55) -> int:
-    """Snap midi note to nearest G minor scale tone."""
+def quantize_to_scale(midi: int, root: int = 55,
+                       scale_offsets: Optional[list[int]] = None) -> int:
+    """Snap midi note to nearest scale tone."""
+    if scale_offsets is None:
+        scale_offsets = [0, 2, 3, 5, 7, 8, 10]
     pc = (midi - root) % 12
-    best = min(_G_NATURAL_MINOR, key=lambda x: min(abs(pc - x), 12 - abs(pc - x)))
+    best = min(scale_offsets, key=lambda x: min(abs(pc - x), 12 - abs(pc - x)))
     return midi + (best - pc)
 
 
@@ -90,24 +205,14 @@ def midi_to_freq(n: int) -> float:
     return 440.0 * (2.0 ** ((n - 69) / 12.0))
 
 
-# Chord progression — 4 chords, 4 bars each (16 bars total per cycle).
-# Chosen to sit naturally in G minor (i → VI → III → VII).
-# Each entry is (root_degree, chord_tones_as_scale_degrees).
-# Research: setCpm(140/4), setScale("g:minor"), progression implicit in bline.
-_CHORD_PROG = [
-    # (root_degree, [scale degrees for chord tones])
-    (0,  [0, 2, 4]),   # Gm  (i)
-    (5,  [5, 7, 9]),   # Cm  (iv)
-    (3,  [3, 5, 7]),   # A#  (III)
-    (4,  [4, 6, 8]),   # Dm  (v)
-]
 CHORD_BARS = 4   # bars per chord (matches bline/bstruct 4-bar blocks)
 
-def chord_for_bar(bar: int) -> list[int]:
-    """Return MIDI notes for the current chord block."""
-    chord_idx = (bar // CHORD_BARS) % len(_CHORD_PROG)
-    root_deg, tone_degs = _CHORD_PROG[chord_idx]
-    return [scale_degree_to_midi(d) for d in tone_degs]
+def chord_for_bar(bar: int, cfg: "SongConfig") -> list[int]:
+    """Return MIDI notes for the current chord block, using config's scale and root."""
+    chord_idx = (bar // CHORD_BARS) % len(cfg.chord_prog)
+    tone_degs = cfg.chord_prog[chord_idx]
+    return [scale_degree_to_midi(d, cfg.root_midi + 12, cfg.scale_offsets)
+            for d in tone_degs]
 
 # ---------------------------------------------------------------------------
 # Drum patterns
@@ -174,40 +279,45 @@ def _rlpf_to_hz(slider: float) -> float:
     v = max(0.01, slider) * 12.0
     return v ** 4.0
 
-def filter_cutoff_arc(bar: int) -> float:
+def filter_cutoff_arc(bar: int, pb_bars: tuple[int, int] = (32, 77)) -> float:
     """rlpf slider arc: 0.55 → 0.88 over ~128 bars, with two deliberate pullbacks.
     Research: gradual opening with pullbacks at ~bar 32 and ~bar 77.
     Floor raised to 0.55 (≈2.8 kHz) so pad/lead are audible from the start.
+    pb_bars: (bar of first pullback, bar of second pullback) — seeded from SongConfig.
     """
     t = min(bar / 128.0, 1.0)
+    t_pb1 = pb_bars[0] / 128.0
+    t_pb2 = pb_bars[1] / 128.0
     base = 0.55 + 0.33 * t
-    pb1 = 0.12 * math.exp(-((t - 0.25) ** 2) / 0.002)   # pullback ~bar 32
-    pb2 = 0.16 * math.exp(-((t - 0.60) ** 2) / 0.003)   # pullback ~bar 77
+    pb1 = 0.12 * math.exp(-((t - t_pb1) ** 2) / 0.002)
+    pb2 = 0.16 * math.exp(-((t - t_pb2) ** 2) / 0.003)
     slider = max(0.48, min(0.90, base - pb1 - pb2))
     return _rlpf_to_hz(slider)
 
-def fm_depth_arc(bar: int) -> float:
+def fm_depth_arc(bar: int, effective_stage_bars: dict) -> float:
     """FM depth: 0 for first ~96 bars, then ramps to 0.55 by bar 128.
     Research: fm(slider(0)) early, opens to 0.606 after ~2/3 through session.
     """
-    if bar < STAGE_BARS["fm_on"]:
+    if bar < effective_stage_bars["fm_on"]:
         return 0.0
-    t = min((bar - STAGE_BARS["fm_on"]) / 32.0, 1.0)
+    t = min((bar - effective_stage_bars["fm_on"]) / 32.0, 1.0)
     return t * 0.55
 
-def delay_wet_arc(bar: int) -> float:
+def delay_wet_arc(bar: int, effective_stage_bars: dict) -> float:
     """Lead delay wet: opens to wash ~bar 48, pulls back after ~bar 80.
     Research: delay(0.585→0.773→1.0→0.438) documented in 3fpx7Scysw4.
     """
-    if bar < STAGE_BARS["lead_melody_on"]:
+    lm_bar = effective_stage_bars["lead_melody_on"]
+    if bar < lm_bar:
         return 0.55
-    elif bar < 48:
-        t = (bar - STAGE_BARS["lead_melody_on"]) / (48 - STAGE_BARS["lead_melody_on"])
+    peak_bar = lm_bar + 24
+    if bar < peak_bar:
+        t = (bar - lm_bar) / max(peak_bar - lm_bar, 1)
         return 0.55 + t * 0.25           # 0.55 → 0.80
-    elif bar < 72:
+    elif bar < peak_bar + 24:
         return 0.80                       # peak wash
     else:
-        t = min((bar - 72) / 40.0, 1.0)
+        t = min((bar - (peak_bar + 24)) / 40.0, 1.0)
         return max(0.50, 0.80 - t * 0.30) # 0.80 → 0.50
 
 def acidenv_arc(bar: int) -> float:
@@ -274,16 +384,10 @@ SIDECHAIN_STEPS:   int   = 6     # recover over ~0.4 beat
 # Master — lower drive so voices other than kick have headroom.
 DRIVE: float = 1.4
 
-# Notearp for lead — 16-step pattern of chord-tone indices (0,1,2) or -1=rest.
-# Derived from "< <- - - -> 0 1@2 0 1 0 1>*16" in Coding Trance IV.
-# 0 = chord root, 1 = chord third, 2 = chord fifth.
-# The heavy delay fills in the gaps, creating the wash characteristic of her lead.
-NOTEARP: list[int] = [
-    0, -1, -1, -1,   # beat 1: root + 3 rests
-    1,  0,  1, -1,   # beat 2: third, root, third, rest
-    0, -1,  1,  0,   # beat 3: root, rest, third, root
-    1, -1, -1, -1,   # beat 4: third + 3 rests
-]
+# Notearp for lead — set at startup from SongConfig.notearp_pattern.
+# 0 = chord root, 1 = chord third, 2 = chord fifth, -1 = rest.
+# Default (variant 0) matches original Switch Angel pattern.
+NOTEARP: list[int] = _NOTEARP_VARIANTS[0]
 
 # ---------------------------------------------------------------------------
 # Synthesis helpers
@@ -665,33 +769,34 @@ class ArrangementState:
     brown_seed: int = 0
 
 
-def _stage_active(bar: int, key: str) -> bool:
-    return bar >= STAGE_BARS[key]
+def _stage_active(bar: int, key: str, eff_stage_bars: dict) -> bool:
+    return bar >= eff_stage_bars[key]
 
 
-def _target_gain(bar: int, voice: str) -> float:
+def _target_gain(bar: int, voice: str, eff_stage_bars: dict) -> float:
     """Return target gain for a voice at a given bar."""
     if voice == "kick":
-        return 1.0 if _stage_active(bar, "kick_on") else 0.0
+        return 1.0 if _stage_active(bar, "kick_on", eff_stage_bars) else 0.0
     if voice == "hihat":
-        return 0.75 if _stage_active(bar, "hihat_on") else 0.0
+        return 0.75 if _stage_active(bar, "hihat_on", eff_stage_bars) else 0.0
     if voice == "clap":
-        return 0.8 if _stage_active(bar, "clap_on") else 0.0
+        return 0.8 if _stage_active(bar, "clap_on", eff_stage_bars) else 0.0
     if voice == "pad":
-        return 1.0 if _stage_active(bar, "pad_on") else 0.0
+        return 1.0 if _stage_active(bar, "pad_on", eff_stage_bars) else 0.0
     if voice == "lead":
-        return 1.0 if _stage_active(bar, "lead_root_on") else 0.0
+        return 1.0 if _stage_active(bar, "lead_root_on", eff_stage_bars) else 0.0
     if voice == "pulse":
-        return 0.6 if _stage_active(bar, "pulse_on") else 0.0
+        return 0.6 if _stage_active(bar, "pulse_on", eff_stage_bars) else 0.0
     return 0.0
 
 
-def advance_arrangement(state: ArrangementState, bar: int, target_vol: float) -> None:
+def advance_arrangement(state: ArrangementState, bar: int, target_vol: float,
+                        eff_stage_bars: dict) -> None:
     state.step += 1
 
     for v in ("kick", "hihat", "clap", "pad", "lead", "pulse"):
         cur = getattr(state, f"{v}_gain")
-        tgt = _target_gain(bar, v)
+        tgt = _target_gain(bar, v, eff_stage_bars)
         setattr(state, f"{v}_gain", cur + (tgt - cur) * 0.04)
 
     state.sidechain_env = min(1.0, state.sidechain_env + 1.0 / SIDECHAIN_STEPS)
@@ -747,6 +852,36 @@ def main() -> None:
                         format="%(asctime)s %(levelname)s %(message)s",
                         stream=sys.stderr)
 
+    # ------------------------------------------------------------------
+    # Build deterministic song config from seed + mood
+    # ------------------------------------------------------------------
+    cfg = build_song_config(args.seed, args.mood)
+
+    # Apply stage jitter to STAGE_BARS, preserving order and non-negative values.
+    # Build effective stage bars: clamp so each stage >= 0 and >= prev stage + 4.
+    _stage_order = [
+        "kick_on", "pad_on", "lead_root_on", "lead_melody_on",
+        "pad_chord_on", "lead_voicing_on", "clap_on", "fm_on",
+        "pulse_on", "hihat_on", "kick_syncopated",
+    ]
+    eff_stage_bars: dict[str, int] = {}
+    prev_bar = 0
+    for key in _stage_order:
+        raw = STAGE_BARS[key] + cfg.stage_jitter[key]
+        clamped = max(prev_bar, max(0, raw))
+        eff_stage_bars[key] = clamped
+        prev_bar = clamped + 4
+
+    # Print startup config line
+    root_pc = cfg.root_midi % 12
+    root_name = _NOTE_NAMES[root_pc]
+    scale_suffix = "m" if cfg.scale_offsets[2] == 3 else ("dor" if cfg.scale_offsets[5] == 9 else "")
+    prog_name = _MOOD_NAMES[cfg.mood]
+    print(
+        f"[v2] seed={args.seed} mood={cfg.mood} root={root_name} "
+        f"key={root_name}{scale_suffix} prog={prog_name} arp_variant={cfg.arp_variant}"
+    )
+
     wav_mode = args.wav is not None
     wav_chunks: list[np.ndarray] = []
     stream = None
@@ -772,8 +907,6 @@ def main() -> None:
     kick_notes:  list[PrerenderedNote] = []
     hihat_notes: list[PrerenderedNote] = []
     clap_notes:  list[PrerenderedNote] = []
-
-    rng = random.Random(args.seed)
 
     fade_out = False
     fade_out_steps = 32 * STEPS_PER_BAR
@@ -801,30 +934,33 @@ def main() -> None:
                         stream.write(np.zeros((samples_per_step, 2), dtype=np.float32))
                     break
             else:
-                advance_arrangement(state, bar, args.volume)
+                advance_arrangement(state, bar, args.volume, eff_stage_bars)
 
             # ----------------------------------------------------------------
             # Stage flags and arc values for this bar
             # ----------------------------------------------------------------
-            pad_chord_active  = _stage_active(bar, "pad_chord_on")
-            lead_melody_active = _stage_active(bar, "lead_melody_on")
-            lead_voicing_active = _stage_active(bar, "lead_voicing_on")
-            kick_steps = KICK_STEPS_SYNCOPATED if _stage_active(bar, "kick_syncopated") else KICK_STEPS_SIMPLE
+            pad_chord_active    = _stage_active(bar, "pad_chord_on", eff_stage_bars)
+            lead_melody_active  = _stage_active(bar, "lead_melody_on", eff_stage_bars)
+            lead_voicing_active = _stage_active(bar, "lead_voicing_on", eff_stage_bars)
+            kick_steps = (KICK_STEPS_SYNCOPATED
+                          if _stage_active(bar, "kick_syncopated", eff_stage_bars)
+                          else KICK_STEPS_SIMPLE)
 
-            live_cutoff   = filter_cutoff_arc(bar)
-            live_fm_depth = fm_depth_arc(bar)
-            live_delay_wet = delay_wet_arc(bar)
-            live_acidenv  = acidenv_arc(bar)
+            live_cutoff    = filter_cutoff_arc(bar, cfg.filter_pb_bars)
+            live_fm_depth  = fm_depth_arc(bar, eff_stage_bars)
+            live_delay_wet = delay_wet_arc(bar, eff_stage_bars)
+            live_acidenv   = acidenv_arc(bar)
 
             # ----------------------------------------------------------------
             # Chord / scale
             # ----------------------------------------------------------------
             pad_degree = pad_root_degree(bar, pad_chord_active)
-            pad_root_midi = scale_degree_to_midi(pad_degree)
-            pad_notes_midi = [pad_root_midi, pad_root_midi - 14, pad_root_midi - 21]
+            pad_root_note = scale_degree_to_midi(pad_degree, cfg.root_midi + 12,
+                                                 cfg.scale_offsets)
+            pad_notes_midi = [pad_root_note, pad_root_note - 14, pad_root_note - 21]
 
             voicing_shift = lead_voicing_semitones(bar, lead_voicing_active)
-            chord = chord_for_bar(bar)   # [root, third, fifth]
+            chord = chord_for_bar(bar, cfg)   # [root, third, fifth]
 
             # ----------------------------------------------------------------
             # Kick
@@ -880,7 +1016,8 @@ def main() -> None:
 
                 amp_env = acidenv(samples_per_step, amount=live_acidenv)
                 cut_env = lpenv(samples_per_step, live_cutoff)
-                gate_env = trancegate_envelope(step_in_bar, samples_per_step)
+                gate_env = trancegate_envelope(step_in_bar, samples_per_step,
+                                               duty=cfg.tgate_density)
 
                 for vi, note in enumerate(state.pad_current_notes):
                     if note < 0:
@@ -916,7 +1053,7 @@ def main() -> None:
                     fire_note = step_in_bar == 0
                     arp_tone_idx = 0 if fire_note else -1
                 else:
-                    arp_tone_idx = NOTEARP[step_in_bar]
+                    arp_tone_idx = cfg.notearp_pattern[step_in_bar]
 
                 if arp_tone_idx >= 0:
                     base_note = chord[min(arp_tone_idx, len(chord) - 1)]
@@ -996,7 +1133,7 @@ def main() -> None:
 
             if step_in_bar == 0 and not fade_out:
                 cutoff_k = live_cutoff / 1000.0
-                n_active = sum(1 for v in STAGE_BARS.values() if bar >= v)
+                n_active = sum(1 for v in eff_stage_bars.values() if bar >= v)
                 print(
                     f"[v2] bar={bar+1:4d}  stages={n_active}/11"
                     f"  K:{state.kick_gain:.2f} P:{state.pad_gain:.2f} L:{state.lead_gain:.2f}"
