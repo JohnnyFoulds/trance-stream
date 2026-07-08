@@ -101,8 +101,8 @@ LEAD_LOW: int = 60    # C4  — expanded to two octaves for melodic range
 LEAD_HIGH: int = 84   # C6
 ARP_LOW: int = 72     # C5  — arp soars above the lead (trance convention)
 ARP_HIGH: int = 96    # C7
-PAD_LOW: int = 60     # C4 — keep pad above bass register
-PAD_HIGH: int = 79    # G5
+PAD_LOW: int = 62     # D4 — mid-register anchor note for pad
+PAD_HIGH: int = 74    # D5
 
 # Phrase / bar shaping
 MAX_LEAD_INTERVAL: int = 7
@@ -136,10 +136,10 @@ DETUNE_CENTS_PAD: float = 20.0
 
 # Per-voice level trims (applied at note creation; tune by ear)
 KICK_LEVEL: float = 1.00   # kick is the anchor
-BASS_LEVEL: float = 0.80   # rolling 16ths
-LEAD_LEVEL: float = 3.00   # 3-voice stack (÷3 per voice = 1.00 each)
-ARP_LEVEL:  float = 1.20   # high-register arp
-PAD_LEVEL:  float = 0.90   # background texture
+BASS_LEVEL: float = 0.00   # unused — low end comes from pad -14/-21 voicing
+LEAD_LEVEL: float = 2.40   # 3-voice stack (÷3 per voice = 0.80 each)
+ARP_LEVEL:  float = 0.90   # high-register arp
+PAD_LEVEL:  float = 1.20   # pad carries the bass — needs more headroom
 
 # Kick synthesis (starter values; tune by ear)
 KICK_F0: float = 160.0    # Hz, sweep start
@@ -170,8 +170,8 @@ LEAD_LFO_RATE: float = 0.15
 BASS_CUTOFF_BASE: float = 900.0
 BASS_CUTOFF_SWEEP: float = 400.0
 BASS_LFO_RATE: float = 0.08
-PAD_CUTOFF_BASE: float = 600.0    # warm, muffled — sits behind the lead
-PAD_CUTOFF_SWEEP: float = 300.0
+PAD_CUTOFF_BASE: float = 1800.0   # matches rlpf(0.539) ≈ 1748 Hz
+PAD_CUTOFF_SWEEP: float = 600.0
 PAD_LFO_RATE: float = 0.05
 
 # Soft-clip drive (tune by ear)
@@ -185,15 +185,16 @@ ARP_DIR_BIT: int = 23
 
 # Phase target voice gains
 PHASE_TARGET_GAINS: dict[str, dict[str, float]] = {
+    # bass gain is always 0 — low end comes from the pad's -14/-21 voicing
     "Intro":     {"kick": 0.4, "bass": 0.0, "lead": 0.0,
-                  "arp": 0.7, "pad": 0.6, "snare": 0.0},
-    "Groove":    {"kick": 1.0, "bass": 1.0, "lead": 1.0,
+                  "arp": 0.7, "pad": 0.7, "snare": 0.0},
+    "Groove":    {"kick": 1.0, "bass": 0.0, "lead": 1.0,
                   "arp": 0.0, "pad": 1.0, "snare": 0.0},
     "Breakdown": {"kick": 0.0, "bass": 0.0, "lead": 0.7,
                   "arp": 1.0, "pad": 1.0, "snare": 0.0},
     "Buildup":   {"kick": 0.5, "bass": 0.0, "lead": 0.0,
                   "arp": 1.0, "pad": 1.0, "snare": 0.0},
-    "Drop":      {"kick": 1.0, "bass": 1.0, "lead": 1.0,
+    "Drop":      {"kick": 1.0, "bass": 0.0, "lead": 1.0,
                   "arp": 0.0, "pad": 1.0, "snare": 0.0},
 }
 PHASE_SEQUENCE: list[str] = [
@@ -395,18 +396,18 @@ def chord_wide_voicing(
     chord: list[int],
     mid_note: int,
 ) -> list[int]:
-    """Build a mid-register pad voicing that does not fight the bass/kick.
+    """Switch Angel's pad voicing: mid note + -14 and -21 semitones below.
 
-    Returns the mid note plus a chord fifth above and a minor third below —
-    a spread triad in the mid register.  We do NOT use Switch Angel's -14/-21
-    bass intervals here because our setup has a separate bass voice; those
-    low notes would clash with the kick and bass synth.
+    This matches her Strudel .add("-14,-21") on orbit 2. The two low notes
+    ARE the bass — there is no separate bass synth in her setup. The mid note
+    sits in the D4-D5 register; the low notes land in the bass/sub register
+    and provide the low-end body the kick sits on top of.
 
-    :param chord: Bass-register chord tones (unused; caller picks mid_note).
-    :param mid_note: Central MIDI note; intervals are relative to this.
-    :returns: Three-note list ``[mid-3, mid, mid+7]``.
+    :param chord: Unused — voicing is interval-relative to mid_note.
+    :param mid_note: Central MIDI note in mid register.
+    :returns: Three-note list [mid-21, mid-14, mid].
     """
-    return [mid_note - 3, mid_note, mid_note + 7]
+    return [mid_note - 21, mid_note - 14, mid_note]
 
 
 def chord_close_voicing(
@@ -734,14 +735,12 @@ def select_lead_note(
 ) -> Optional[int]:
     """Select the lead melody note for the current step.
 
-    The lead fires **once per bar** (step_in_bar == 0) and the note is held
-    for the full bar (16 steps).  The trance gate applied downstream provides
-    all the rhythmic on/off texture — the lead itself is a slow melodic line
-    that changes one note per bar by smooth voice leading (closest chord tone).
+    The lead fires once per bar (step_in_bar == 0).  Instead of a random
+    walk, it follows a phrase shape: a short melodic contour of scale-degree
+    offsets that repeats across bars and shifts when the chord changes.
 
-    The CA ``LEAD_GATE`` bit biases direction (up vs down) rather than acting
-    as a hard gate.  This produces a flowing melodic line instead of a random
-    barrage of notes.
+    The phrase is generated from the chord pool and a CA-seeded contour so
+    each seed and chord produces a different but musically coherent phrase.
 
     :param state: Current engine state (mutated: updates note-tracking fields).
     :param chord: Current chord tones in bass register.
@@ -755,33 +754,28 @@ def select_lead_note(
     if not pool:
         return None
 
-    prev = state.prev_lead_note
+    # Build a phrase contour as index offsets into the pool.
+    # Contour length = 4 bars; the CA bit determines shape variant (0 or 1).
+    # Shape is re-derived each time but stays consistent within a chord block
+    # because chord + CA are stable for 4 bars.
+    phrase_bar = state.bar_note_count % 4   # 0-3 within the phrase
+    ca_variant = state.ca_row[PHRASE_BIT]
 
-    # First note ever — start in the middle of the register
-    if prev is None:
-        mid = len(pool) // 2
-        note = pool[mid]
-        _update_lead_state(state, note, prev)
-        return note
-
-    # Move to the nearest chord tone in the direction biased by the CA bit.
-    # CA LEAD_GATE=1 → prefer ascending; 0 → prefer descending.
-    # If we've climbed too high, force descending regardless.
-    prefer_up = (
-        state.ca_row[LEAD_GATE] == 1
-        and prev < LEAD_LOW + (LEAD_HIGH - LEAD_LOW) * 2 // 3
-    )
-
-    if prefer_up:
-        # Nearest chord tone above prev; wrap to bottom if at top
-        above = [n for n in pool if n > prev]
-        note = min(above) if above else pool[0]
+    # Two contour shapes (index offsets into the pool, relative to mid):
+    # Shape 0: rise then fall  — classic trance arch phrase
+    # Shape 1: fall then rise  — inverted arch
+    mid = len(pool) // 2
+    if ca_variant == 0:
+        # e.g. mid, mid+1, mid+2, mid+1
+        offsets = [0, 1, 2, 1]
     else:
-        # Nearest chord tone below prev; wrap to top if at bottom
-        below = [n for n in pool if n < prev]
-        note = max(below) if below else pool[-1]
+        # e.g. mid, mid-1, mid+1, mid
+        offsets = [0, -1, 1, 0]
 
-    _update_lead_state(state, note, prev)
+    idx = max(0, min(len(pool) - 1, mid + offsets[phrase_bar]))
+    note = pool[idx]
+
+    _update_lead_state(state, note, state.prev_lead_note)
     return note
 
 
@@ -811,9 +805,10 @@ def select_arp_note(
 ) -> Optional[int]:
     """Select the arp note for the current step.
 
-    Reads ``ARP_GATE`` from the CA row and applies ``ARP_REST_PROBABILITY``
-    as a secondary filter.  Cycles ``prev_arp_index`` through the arp pool
-    (chord tones transposed across ``[ARP_LOW, ARP_HIGH]``).
+    Steps through chord tones in the high register (ARP_LOW–ARP_HIGH) in
+    strict ascending order, wrapping at the top.  The CA ARP_GATE bit gates
+    individual steps (creating rhythmic gaps), and ARP_DIR_BIT flips
+    direction at phrase boundaries to add variation.
 
     :param state: Current engine state (mutated: updates arp index/direction).
     :param chord: Current chord tones in bass register.
@@ -822,10 +817,8 @@ def select_arp_note(
     """
     if state.ca_row[ARP_GATE] == 0:
         return None
-    if state.rng.random() < ARP_REST_PROBABILITY:
-        return None
 
-    # Build arp pool: chord tones across ARP_LOW-ARP_HIGH
+    # Build arp pool: all chord-tone octave transpositions within register
     pool: list[int] = []
     for base in chord:
         tone = base
@@ -838,24 +831,18 @@ def select_arp_note(
         return None
     pool = sorted(set(pool))
 
-    # Reverse at phrase boundary (ARP_DIR_BIT guarded by phrase_step reset)
-    at_phrase_boundary = (
-        state.ca_row[ARP_DIR_BIT] == 1
-        and state.phrase_step <= 1
-    )
-    if at_phrase_boundary:
+    # Flip direction at phrase boundary
+    if state.ca_row[ARP_DIR_BIT] == 1 and state.phrase_step <= 1:
         state.arp_direction *= -1
 
-    # Advance index
+    # Advance index strictly, wrap at boundaries
     idx = state.prev_arp_index + state.arp_direction
-    # Bounce at boundaries
     if idx >= len(pool):
-        idx = len(pool) - 2
-        state.arp_direction = -1
-    elif idx < 0:
-        idx = 1
+        idx = 0
         state.arp_direction = 1
-    idx = max(0, min(idx, len(pool) - 1))
+    elif idx < 0:
+        idx = len(pool) - 1
+        state.arp_direction = -1
     state.prev_arp_index = idx
     return pool[idx]
 
