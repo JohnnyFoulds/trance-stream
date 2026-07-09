@@ -12,12 +12,12 @@ import numpy as np
 class AcidBass:
     """SA's acid bass instrument.
 
-    Signal chain: sawtooth → acidenv → lpf
+    Signal chain: sawtooth → VCA env → acidenv → lpf2
 
-    Note is transposed down by the caller (typically played at -14 semitones
+    Note is transposed down by the caller (typically played at -24 semitones
     relative to the pad root to sit in the sub-bass register).
 
-    Gain: GAIN_BASS = 0.55
+    Gain: GAIN_BASS = 1.20
     """
 
     def __init__(self, gain: float = None, sr: int = 44100):
@@ -25,6 +25,7 @@ class AcidBass:
 
         self.gain = gain if gain is not None else GAIN_BASS
         self.sr   = sr
+        self._osc_phase = 0.0
 
     def render(self, midi_note: int, n_samples: int,
                cutoff_slider: float = 0.45,
@@ -50,7 +51,7 @@ class AcidBass:
             mix compatibility).
         """
         from synth.oscillators import sawtooth
-        from synth.filters import lpf, rlpf_to_hz
+        from synth.filters import lpf2, rlpf_to_hz
         from synth.envelopes import acidenv
 
         g      = gain if gain is not None else self.gain
@@ -62,14 +63,24 @@ class AcidBass:
                     np.zeros(0, dtype=np.float32))
 
         freq_hz = 440.0 * 2.0 ** ((midi_note - 69) / 12.0)
-        samples, _ = sawtooth(freq_hz, n_samples, self.sr)
+        samples, self._osc_phase = sawtooth(freq_hz, n_samples, self.sr,
+                                            phase=self._osc_phase)
+
+        # VCA: percussive amplitude envelope (3ms attack, 75ms exponential decay).
+        t = np.arange(n_samples, dtype=np.float32) / self.sr
+        vca_attack_s = 0.003
+        vca_tau = 0.075
+        vca = np.where(t < vca_attack_s,
+                       t / vca_attack_s,
+                       np.exp(-(t - vca_attack_s) / vca_tau))
+        samples = samples * vca.astype(np.float32)
 
         # acidenv modulates LP cutoff: 3ms attack, exponential decay.
         env = acidenv(n_samples, self.sr, amount=0.65)
 
-        # 8 stepped filter segments — bounded loop over segments, not samples.
+        # 64 fine filter segments — ~3ms each, transitions imperceptible.
         base_hz = 80.0
-        n_segs  = 8
+        n_segs  = 64
         seg_len = max(1, n_samples // n_segs)
         zi = None
         for seg in range(n_segs):
@@ -81,7 +92,7 @@ class AcidBass:
             mid_val  = float(env[s + (e - s) // 2])
             seg_cut  = base_hz + (cutoff - base_hz) * mid_val
             seg_cut  = float(np.clip(seg_cut, 30.0, self.sr * 0.45))
-            samples[s:e], zi = lpf(samples[s:e], seg_cut, self.sr, zi)
+            samples[s:e], zi = lpf2(samples[s:e], seg_cut, q=2.5, sr=self.sr, zi=zi)
 
         out = (samples * g).astype(np.float32)
         return out, out.copy()

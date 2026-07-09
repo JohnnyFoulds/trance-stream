@@ -50,13 +50,15 @@ class AcidLead:
         self._acidenv_decay = _acidenv_decay
         self._delay        = FeedbackDelay(delay_s=0.375, feedback=0.8, wet=delay_wet, sr=sr)
         self._rng          = np.random.default_rng(42)
-        self._osc_phases   = None  # shape (saw_count,); reset on each note trigger
+        self._osc_phases       = None  # shape (saw_count,); persisted across render calls
+        self._fm_phase_carrier = 0.0
 
     def render(self, midi_notes: list, n_samples: int,
                bar_offset_samples: int = 0,
                cutoff_slider: float = None,
                fm_depth: float = 0.0,
-               gain: float = None) -> tuple:
+               gain: float = None,
+               samples_per_bar: int = None) -> tuple:
         """Render n_samples of lead audio.
 
         Parameters
@@ -82,14 +84,14 @@ class AcidLead:
         (buf_l, buf_r) : tuple of float32 ndarray, shape (n_samples,)
         """
         from synth.oscillators import supersaw
-        from synth.filters import lpf, rlpf_to_hz
+        from synth.filters import lpf2, rlpf_to_hz
         from synth.envelopes import acidenv, trancegate
         from song.theory import (TRANCEGATE_SPEED, TRANCEGATE_AMOUNT,
-                                  samples_per_bar)
+                                  samples_per_bar as _samples_per_bar)
 
         slider = cutoff_slider if cutoff_slider is not None else self.cutoff_slider
         g      = gain if gain is not None else self.gain
-        spb    = samples_per_bar()
+        spb    = samples_per_bar if samples_per_bar is not None else _samples_per_bar()
         cutoff = rlpf_to_hz(slider)
 
         if not midi_notes or n_samples <= 0:
@@ -100,26 +102,27 @@ class AcidLead:
         buf_r = np.zeros(n_samples, dtype=np.float32)
         n_notes = len(midi_notes)
 
-        t = np.arange(n_samples, dtype=np.float64) / self.sr
-
         for note in midi_notes:
             note = max(0, min(127, int(note)))
-            l, r, _ = supersaw(note, n_samples, self.sr,
-                                saw_count=self._saw_count,
-                                detune_cents=self._detune_cents)
+            l, r, self._osc_phases = supersaw(note, n_samples, self.sr,
+                                               saw_count=self._saw_count,
+                                               detune_cents=self._detune_cents,
+                                               osc_phases=self._osc_phases)
             if fm_depth > 0.0:
-                # SA's fm .5: modulator at 0.5× carrier (ratio 1:2), index ≈ 0.5.
-                # Ratio 1:2 places sidebands at 0.5×, 1.5×, 2.5× carrier —
-                # sub-harmonics that warm the tone without creating odd-partial
-                # reed/harmonica character (which comes from ratio 4:1 + high index).
+                # SA's .fm(.5).fmwave("brown"): brown-noise phase modulation.
+                # Brown noise as modulator creates warm, inharmonic sidebands with
+                # no discrete frequency peaks — avoids the "rat/mosquito" tones that
+                # a sine modulator at a fixed ratio produces.
+                from synth.oscillators import brown_noise
                 carrier_freq = 440.0 * 2.0 ** ((note - 69) / 12.0)
-                mod_freq  = carrier_freq * 0.5
-                mod_index = fm_depth * 1.0      # index 0 → 0.55 at max fm_depth
-                phase_mod = mod_index * np.sin(2.0 * np.pi * mod_freq * t)
-                fm_voice  = (np.sin(2.0 * np.pi * carrier_freq * t + phase_mod)
-                              .astype(np.float32))
-                # Scale FM voice to 20% of the supersaw RMS so it enriches
-                # without dominating regardless of the saw's output level.
+                mod_index = fm_depth * 2.0
+                brown = brown_noise(n_samples, self._rng)
+                n_arr = np.arange(n_samples, dtype=np.float64)
+                carr_phase_vec = (2.0 * np.pi * carrier_freq / self.sr * n_arr
+                                  + 2.0 * np.pi * self._fm_phase_carrier)
+                fm_voice = np.sin(carr_phase_vec + mod_index * brown).astype(np.float32)
+                self._fm_phase_carrier = (carrier_freq * n_samples / self.sr
+                                          + self._fm_phase_carrier) % 1.0
                 saw_rms = float(np.sqrt(np.mean(l ** 2))) or 1e-6
                 fm_rms  = float(np.sqrt(np.mean(fm_voice ** 2))) or 1e-6
                 fm_weight = (saw_rms * 0.20) / fm_rms
@@ -129,14 +132,10 @@ class AcidLead:
             buf_r += r / n_notes
 
         # LP filter: acidenv sweeps the cutoff from base_hz up to full cutoff.
-        # SA's .lpenv 2 is modelled as a rising acidenv on the filter frequency.
-        # base_hz is 60% of the target cutoff (not 5% as before) so the lead has
-        # perceptible brightness even before the acid peak opens it fully.
-        # This ensures the lead registers in the 600-2000 Hz range from the start.
         env     = acidenv(n_samples, self.sr, amount=0.55,
                           decay_s=self._acidenv_decay)
-        base_hz = cutoff * 0.60   # was 0.05 — too dark; SA's lead starts bright
-        n_segs  = 8
+        base_hz = cutoff * 0.60
+        n_segs  = 64
         seg_len = max(1, n_samples // n_segs)
         zi_l = zi_r = None
         for seg in range(n_segs):
@@ -148,8 +147,8 @@ class AcidLead:
             mid_val  = float(env[s + (e - s) // 2])
             seg_cut  = base_hz + (cutoff - base_hz) * mid_val
             seg_cut  = float(np.clip(seg_cut, 50.0, self.sr * 0.45))
-            buf_l[s:e], zi_l = lpf(buf_l[s:e], seg_cut, self.sr, zi_l)
-            buf_r[s:e], zi_r = lpf(buf_r[s:e], seg_cut, self.sr, zi_r)
+            buf_l[s:e], zi_l = lpf2(buf_l[s:e], seg_cut, q=2.0, sr=self.sr, zi=zi_l)
+            buf_r[s:e], zi_r = lpf2(buf_r[s:e], seg_cut, q=2.0, sr=self.sr, zi=zi_r)
 
         # Trancegate: smooth cosine amplitude gate at 1.5× bar rate.
         gate  = trancegate(n_samples, self.sr, spb,

@@ -7,7 +7,7 @@
 # All functions accept and return filter state (zi) for sample-continuous processing.
 
 import numpy as np
-from scipy.signal import butter, iirfilter, lfilter, lfilter_zi
+from scipy.signal import butter, lfilter, lfilter_zi
 
 
 def rlpf_to_hz(slider: float) -> float:
@@ -72,22 +72,8 @@ def lpf2(
     """
     nyq = sr / 2.0
     cutoff = np.clip(cutoff_hz, 10.0, nyq * 0.99) / nyq
-    b, a = iirfilter(
-        2,
-        cutoff,
-        btype="low",
-        ftype="butter",
-        rs=None,
-        rp=None,
-        analog=False,
-        output="ba",
-    )
-    # Scale coefficients to approximate the requested Q via the standard
-    # biquad parameterisation. For a 2-pole Butterworth, scipy sets Q=0.707.
-    # We rescale a1 and a2 so the pole radius stays fixed but Q is adjusted.
-    # Equivalent: replace a with the direct-form II coefficients for the
-    # desired Q, keeping the same corner frequency.
-    wc = 2.0 * np.pi * cutoff  # normalised angular frequency (0..pi)
+    # Standard biquad LPF parameterised by corner frequency and Q.
+    wc = np.pi * cutoff  # normalised angular frequency (0..pi); cutoff is f/nyq
     cos_wc = np.cos(wc)
     alpha = np.sin(wc) / (2.0 * q)
     b0 = (1.0 - cos_wc) / 2.0

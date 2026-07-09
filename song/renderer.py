@@ -319,11 +319,33 @@ class SongRenderer:
                 ca_vo = _OFFSETS[_h % len(_OFFSETS)]
 
             if bar >= sb.get('lead_melody_on', 9999):
-                lead_chord_midi = [m + 24 + ca_vo for m in chord_midi]
-                lead_root_midi  = song.root_midi + 24 + ca_vo
+                # Build a 5-tone scale vocabulary from the chord root + 4 steps above.
+                # Target register: song_root + 24 ± 6 semitones (C5 range for G root).
+                # If a computed note would sit too high (>+30 semitones above song root),
+                # fold it down an octave so the melody stays in the C5-F5 window where
+                # it cuts above the pad without being shrieky.
+                from song.theory import degree_to_midi
+                chord_root_degree = chord_degrees[0]
+                target_centre = effective_root + 24 + ca_vo
+                raw_vocab = [
+                    degree_to_midi(chord_root_degree + i, effective_root, song.scale)
+                    for i in range(5)
+                ]
+                # Fold each note into the lead register: transpose by octaves until
+                # the note sits within 6 semitones below target_centre or up to +11 above.
+                lead_vocab = []
+                for note in raw_vocab:
+                    note += 24 + ca_vo
+                    while note > target_centre + 11:
+                        note -= 12
+                    while note < target_centre - 6:
+                        note += 12
+                    lead_vocab.append(note)
+                lead_chord_midi = lead_vocab
+                lead_root_midi  = lead_vocab[0]
             else:
                 lead_chord_midi = [m + 24 for m in chord_midi]
-                lead_root_midi  = song.root_midi + 24
+                lead_root_midi  = effective_root + 24
 
             # CA density drives delay wet: dense CA = more wash (0.25–0.85).
             # Falls back to seed+bar derived value without viz.
@@ -350,14 +372,16 @@ class SongRenderer:
                         continue
                     n_step = min(step_dur, spb - onset)
                     sl, sr_ = lead_track.instrument.render(
-                        [note], n_step, bar_offset_samples=bar * spb + onset, **kwargs)
+                        [note], n_step, bar_offset_samples=bar * spb + onset,
+                        samples_per_bar=spb, **kwargs)
                     lead_l_bar[onset:onset + n_step] += sl
                     lead_r_bar[onset:onset + n_step] += sr_
                 lead_l, lead_r = lead_l_bar, lead_r_bar
             else:
                 # Root note only: single render for whole bar
                 lead_l, lead_r = lead_track.instrument.render(
-                    [lead_root_midi], spb, bar_offset_samples=bar * spb, **kwargs)
+                    [lead_root_midi], spb, bar_offset_samples=bar * spb,
+                    samples_per_bar=spb, **kwargs)
             if kick_buf_l is not None:
                 lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
             mix_l += lead_l
