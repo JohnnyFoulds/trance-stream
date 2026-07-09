@@ -19,6 +19,7 @@ Usage (from trance_stream_v3.py)::
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import shutil
@@ -238,7 +239,8 @@ class Visualiser:
 
         # Resize CA array when terminal width changes, carrying live state across.
         if ca_w != self._ca_width:
-            rng = np.random.default_rng(self.song.root_midi + ca_w)
+            seed_int = int(hashlib.md5(self.song.seed.encode()).hexdigest(), 16) & 0xFFFFFFFF
+            rng = np.random.default_rng(seed_int ^ ca_w)
             new_ca = rng.integers(0, 2, size=ca_w, dtype=np.int32)
             # Overlay existing state into centre of new array for continuity
             if self._ca_width > 0:
