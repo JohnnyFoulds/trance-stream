@@ -123,8 +123,11 @@ class SimpleFDN:
             for d in self._delays
         ]
         self._ptrs = [0] * 4
-        self._feedback = 0.5
-        self._wet = 0.3
+        # feedback=0.85 → T60 ~1300ms at 30ms avg delay — long enough to bridge
+        # the 563ms trancegate troughs without the tail dying mid-silence.
+        self._feedback = 0.85
+        # Wet scales with room_size: small rooms are mostly dry, large rooms diffuse.
+        self._wet = 0.15 + room_size * 0.45
 
     def process(
         self, buf_l: np.ndarray, buf_r: np.ndarray

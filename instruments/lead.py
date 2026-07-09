@@ -125,11 +125,14 @@ class AcidLead:
             buf_l += l / n_notes
             buf_r += r / n_notes
 
-        # LP filter: acidenv sweeps the cutoff from a low base up to full cutoff.
-        # decay_s from character preset: fast (acid) → legato (smooth) → stabby (stab).
+        # LP filter: acidenv sweeps the cutoff from base_hz up to full cutoff.
+        # SA's .lpenv 2 is modelled as a rising acidenv on the filter frequency.
+        # base_hz is 60% of the target cutoff (not 5% as before) so the lead has
+        # perceptible brightness even before the acid peak opens it fully.
+        # This ensures the lead registers in the 600-2000 Hz range from the start.
         env     = acidenv(n_samples, self.sr, amount=0.55,
                           decay_s=self._acidenv_decay)
-        base_hz = min(100.0, cutoff * 0.05)
+        base_hz = cutoff * 0.60   # was 0.05 — too dark; SA's lead starts bright
         n_segs  = 8
         seg_len = max(1, n_samples // n_segs)
         zi_l = zi_r = None

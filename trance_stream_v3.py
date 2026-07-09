@@ -254,43 +254,60 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
         wav_file.setsampwidth(2)
         wav_file.setframerate(sr)
 
-    # blocksize=0 → PortAudio default (~10ms). stream.write() blocks until
-    # the data is consumed, providing natural backpressure. A large blocksize
-    # (e.g. spb=75600) causes underruns: PortAudio drains the buffer and
-    # produces silence before the next bar is ready.
-    stream = sd.OutputStream(samplerate=sr, channels=2, dtype='float32')
-    stream.start()
-    print(f"Streaming {n_bars} bars in real time — Ctrl-C to stop.")
+    import queue, threading
 
-    try:
+    # Double-buffer: render thread fills a queue, audio thread drains it.
+    # This decouples render time from playback so bar boundaries never stall.
+    # Queue depth 2: one bar playing, one bar ready — render of bar N+1 starts
+    # immediately when bar N is queued, not after it finishes playing.
+    audio_queue: queue.Queue = queue.Queue(maxsize=3)
+    SENTINEL = None
+
+    def render_thread():
         for bar_idx in range(n_bars):
-            t_render_start = time.time()
+            t0 = time.time()
             bar_l, bar_r = renderer._render_bar()
-
             if volume != 1.0:
                 bar_l = bar_l * volume
                 bar_r = bar_r * volume
+            render_ms = (time.time() - t0) * 1000
+            audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
+        audio_queue.put(SENTINEL)
 
-            render_ms = (time.time() - t_render_start) * 1000
-            bar_dur_ms = spb / sr * 1000
+    render_t = threading.Thread(target=render_thread, daemon=True)
+    render_t.start()
+
+    stream = sd.OutputStream(samplerate=sr, channels=2, dtype='float32',
+                             latency='low')
+    stream.start()
+    print(f"Streaming {n_bars} bars in real time — Ctrl-C to stop.")
+    bar_dur_ms = spb / sr * 1000
+
+    try:
+        while True:
+            item = audio_queue.get()
+            if item is SENTINEL:
+                break
+            bar_idx, bar_l, bar_r, render_ms = item
             print(f"  bar {bar_idx + 1:4d}/{n_bars}  render={render_ms:.0f}ms  "
                   f"budget={bar_dur_ms:.0f}ms  "
                   f"headroom={bar_dur_ms - render_ms:.0f}ms",
                   end='\r')
-
             stereo = np.column_stack([bar_l, bar_r])
             stream.write(stereo)
-
             all_l.append(bar_l)
             all_r.append(bar_r)
-
             if wav_file is not None:
                 pcm = (np.clip(stereo, -1, 1) * 32767).astype(np.int16)
                 wav_file.writeframes(pcm.tobytes())
 
     except KeyboardInterrupt:
         print(f"\nStopped at bar {len(all_l)}.")
+        # drain the render thread
+        while not audio_queue.empty():
+            audio_queue.get_nowait()
     finally:
+        render_t.join(timeout=2.0)
         stream.stop()
         stream.close()
         if wav_file is not None:

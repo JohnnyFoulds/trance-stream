@@ -258,15 +258,25 @@ def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
     try:
         from instruments.lead import AcidLead
         lead = AcidLead(root_midi=root_midi, sr=sr, character=lead_character)
+        # SA's lead uses slider .593 (≈2563 Hz) as its base — a fixed bright value
+        # independent of the pad's opening arc. The pad arc starts at 0.48 (~1100 Hz)
+        # which makes the lead too dark in bars 8-32. Lock lead at its confirmed base
+        # then allow it to track the full arc once the song opens past that point.
+        def lead_arc(bar, _filter_pb_bar=filter_pb_bar):
+            from song.theory import FILTER_ARC
+            pad_slider = filter_cutoff_arc(bar, _filter_pb_bar)
+            lead_base  = FILTER_ARC['lead_base']  # 0.593
+            slider = max(pad_slider, lead_base)
+            return {
+                'cutoff_slider': slider,
+                'fm_depth':      fm_depth_arc(bar),
+            }
         tracks.append(Track(
             instrument=lead,
             instrument_type='lead',
             active_from_bar=stage_bars['lead_root_on'],
             gain_target=GAIN_LEAD,
-            arc_fn=lambda bar: {
-                'cutoff_slider': filter_cutoff_arc(bar, filter_pb_bar),
-                'fm_depth': fm_depth_arc(bar),
-            },
+            arc_fn=lead_arc,
         ))
     except ImportError:
         pass

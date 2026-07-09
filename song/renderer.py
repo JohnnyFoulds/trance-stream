@@ -188,14 +188,17 @@ class SongRenderer:
         # ── Pad ──────────────────────────────────────────────────────────────
         pad_track = self._get_track('pad')
         if pad_track and pad_track.is_active(bar):
-            # Before pad_chord_on: play root note only; after: full chord
+            # SA's pad sits one octave above the root register (+12 semitones).
+            # chord_midi is computed from root_midi=48 (C3); without the transpose
+            # the pad plays C3-Bb3 (131-233 Hz), one full octave below SA's C4-F4.
             if bar >= sb.get('pad_chord_on', 9999):
-                notes = chord_midi
+                notes = [m + 12 for m in chord_midi]
             else:
-                notes = [song.root_midi]
+                notes = [song.root_midi + 12]
             kwargs = pad_track.render_kwargs(bar)
             pad_l, pad_r = pad_track.instrument.render(
-                notes, spb, gain=GAIN_PAD, **kwargs)
+                notes, spb, gain=GAIN_PAD, chord_id=chord_idx,
+                global_offset_samples=bar * spb, **kwargs)
             # Sidechain: duck pad on kick
             if kick_buf_l is not None:
                 pad_l, pad_r = self._sidechain.process(pad_l, pad_r, kick_buf_l)
@@ -236,29 +239,42 @@ class SongRenderer:
         # ── Lead ─────────────────────────────────────────────────────────────
         lead_track = self._get_track('lead')
         if lead_track and lead_track.is_active(bar):
+            from song.pattern import lead_melody_pattern
             kwargs = lead_track.render_kwargs(bar)
+
+            # SA's lead sits +24 semitones above the base chord (two octaves above
+            # the unshifted chord_midi, one octave above the pad which is at +12).
+            # chord_midi is in the C3 register; pad is at +12 (C4); lead at +24 (C5).
+            # This matches SA's .add 14 in a 7-note scale: +14 scale steps = +24 semitones
+            # = two octaves, placing the lead in C5-F5 (~523-698 Hz) where it cuts above
+            # the pad without clashing.
+            lead_chord_midi = [m + 24 for m in chord_midi]
+            lead_root_midi  = song.root_midi + 24
+
             if bar >= sb.get('lead_melody_on', 9999):
-                # Per-step rendering: each notearp step fires a fresh acidenv.
-                # Each step renders for a bounded duration (4 sixteenth notes) so
-                # delay tails don't accumulate across all steps in the bar.
-                pattern = notearp_pattern(chord_midi)
+                # SA's melody: two sparse notes per bar (steps 4 and 10),
+                # each sustained for 6 sixteenth-notes; note choices cycle by bar.
+                pattern = lead_melody_pattern(lead_chord_midi, bar)
                 lead_l_bar = np.zeros(spb, dtype=np.float32)
                 lead_r_bar = np.zeros(spb, dtype=np.float32)
-                step_dur = sp16 * 4        # acidenv dies in ~80-150ms; 4 16ths ≈ 4×4725 = 18900 samples
+                # 6 sixteenth-notes per note — matches SA's @@2 / @3 weighting.
+                # SA holds notes for ~3/8 of a bar; the acidenv decays in ~120ms
+                # but the trancegate shapes the amplitude further.
+                step_dur = sp16 * 6
                 for step, note in zip(pattern.steps, pattern.notes):
                     onset = step * sp16
                     if onset >= spb:
                         continue
                     n_step = min(step_dur, spb - onset)
                     sl, sr_ = lead_track.instrument.render(
-                        [note], n_step, bar_offset_samples=onset, **kwargs)
+                        [note], n_step, bar_offset_samples=bar * spb + onset, **kwargs)
                     lead_l_bar[onset:onset + n_step] += sl
                     lead_r_bar[onset:onset + n_step] += sr_
                 lead_l, lead_r = lead_l_bar, lead_r_bar
             else:
                 # Root note only: single render for whole bar
                 lead_l, lead_r = lead_track.instrument.render(
-                    [song.root_midi], spb, **kwargs)
+                    [lead_root_midi], spb, bar_offset_samples=bar * spb, **kwargs)
             if kick_buf_l is not None:
                 lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
             mix_l += lead_l

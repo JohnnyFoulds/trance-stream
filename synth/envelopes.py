@@ -84,5 +84,11 @@ def trancegate(
     gate_period_samples = samples_per_bar / speed
     t = np.arange(n_samples, dtype=np.float64) + bar_offset_samples
     phase = 2.0 * np.pi * t / gate_period_samples
-    env = (1.0 + np.cos(phase + np.pi)) / 2.0
-    return (env * amount).astype(np.float32)
+    # Raised cosine from 0→1. amount=1.0 means trough=0 (full silence).
+    # SA's gate with .room(0.7) reverb fills those silences with reverb tail.
+    # Our FDN is shorter, so we lift the trough floor: trough = 1 - amount.
+    # amount=0.7 → trough=0.3 → gate breathes between 0.3 and 1.0 (never silent).
+    cosine_01 = (1.0 + np.cos(phase + np.pi)) / 2.0
+    floor = 1.0 - amount
+    env = floor + cosine_01 * amount
+    return env.astype(np.float32)

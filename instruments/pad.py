@@ -44,29 +44,43 @@ class SupersawPad:
         self.saw_count     = saw_count
         self._fdn          = SimpleFDN(room_size=room_size, sr=sr)
         self._osc_phases   = None  # shape (n_voices, saw_count), initialised on first render
-        self._samples_rendered = 0  # cumulative sample count for trancegate phase continuity
         self._lpf_zi_l     = None  # LP filter state persisted across bars
         self._lpf_zi_r     = None
+        # lpenv persistent state — tracks seconds since the last chord trigger so the
+        # filter swell continues smoothly across bar boundaries instead of resetting
+        # to the bright peak on every new bar render.
+        self._lpenv_t_s    = 0.0    # seconds since last chord trigger
+        self._last_chord_id = None  # last chord index; change = new trigger
 
     def render(self, midi_notes: list, n_samples: int,
                bar_offset_samples: int = 0,
                cutoff_slider: float = None,
-               gain: float = None) -> tuple:
+               gain: float = None,
+               chord_id: int = None,
+               global_offset_samples: int = 0) -> tuple:
         """Render n_samples of pad audio for the given chord (list of MIDI notes).
 
-        midi_notes : list of int — MIDI pitches to play (one supersaw per note)
+        midi_notes  : list of int — MIDI pitches to play (one supersaw per note)
+        chord_id    : int or None — pass the current chord index so a chord change
+                      triggers a fresh lpenv swell. None = treat as same chord.
         Returns (buf_l, buf_r) as float32 numpy arrays.
 
-        For each note in midi_notes: render one supersaw, apply lpenv, sum.
-        Then apply trancegate to the sum. Then FDN. Then overall gain.
+        SA's pad signal chain:
+          supersaw → lpenv filter swell → rlpf LP → trancegate → FDN reverb → gain
 
-        The voicing offsets (-14, -21 semitones from theory.PAD_VOICING_OFFSETS)
-        are applied: each chord note also generates doublings at -14 and -21 semitones.
+        The voicing offsets (-14, -21 semitones) are applied: each chord note also
+        generates doublings at -14 and -21 semitones (sub-bass fills the low end
+        before the acid bass enters).
+
+        SA's lpenv(2): the filter rests at the slider value. On each chord trigger
+        it opens to ~1.5 octaves above the rest cutoff, then decays slowly back
+        over ~0.8 seconds. This is a gentle swell, NOT a wah; it decays slowly
+        enough to sustain brightness through the chord duration.
         """
         import numpy as np
         from synth.oscillators import supersaw
         from synth.filters import lpf, rlpf_to_hz
-        from synth.envelopes import lpenv, trancegate
+        from synth.envelopes import trancegate
         from song.theory import (PAD_VOICING_OFFSETS, TRANCEGATE_SPEED,
                                   TRANCEGATE_AMOUNT, samples_per_bar)
 
@@ -97,8 +111,19 @@ class SupersawPad:
         n_voices = len(all_notes)
         # Store saw_count phases per voice so all detuned oscillators continue
         # correctly across bar boundaries (not just the middle voice).
-        if self._osc_phases is None or self._osc_phases.shape != (n_voices, self.saw_count):
+        # When voice count grows (e.g. root→chord at pad_chord_on), carry over
+        # existing phases and initialise new voices from voice-0's phases so they
+        # don't all restart from 0 simultaneously (which creates a transient pop).
+        if self._osc_phases is None or self._osc_phases.shape[1] != self.saw_count:
             self._osc_phases = np.zeros((n_voices, self.saw_count), dtype=np.float64)
+        elif self._osc_phases.shape[0] != n_voices:
+            old = self._osc_phases
+            self._osc_phases = np.zeros((n_voices, self.saw_count), dtype=np.float64)
+            n_carry = min(old.shape[0], n_voices)
+            self._osc_phases[:n_carry] = old[:n_carry]
+            # New voices above n_carry inherit voice-0 phases to avoid phase-zero pop
+            for v in range(n_carry, n_voices):
+                self._osc_phases[v] = old[0] if old.shape[0] > 0 else np.zeros(self.saw_count)
 
         root_gain = voice_gains[0]  # always 1.0
         for i, (note, vg) in enumerate(zip(all_notes, voice_gains)):
@@ -111,41 +136,56 @@ class SupersawPad:
             buf_l += l * vg
             buf_r += r * vg
 
-        # LP filter sweep driven by lpenv — 8 stepped segments.
-        # Strudel lpenv(2) semantics: filter rests at slider value and opens
-        # 2 octaves (4×) upward on each note trigger, then decays back.
-        # lpenv returns values scaled by amount/9.0 (peak ≈ 0.222 for amount=2);
-        # normalise to [0,1] by dividing by that scale factor.
-        # Filter state (zi_l/zi_r) is persisted across bars to avoid clicks.
-        amount = 2.0
-        env = lpenv(n_samples, self.sr, amount=amount, decay_s=0.3)
-        env_01_scale = amount / 9.0          # peak value of lpenv output
-        base_hz = cutoff                     # resting cutoff = slider value
-        peak_hz = cutoff * 4.0              # 2 octaves above base at trigger
-        seg_len = n_samples // 8
+        # LP filter — SA's lpenv(2) behaviour:
+        #   - Filter rests at slider value (base_hz = cutoff at rest)
+        #   - On chord trigger: opens to peak_hz (~1.5 octaves above = 2.83× base)
+        #   - Decays back to base_hz over ~0.8s (slow swell, not a wah)
+        #   - Cross-bar: if chord has not changed, the swell continues from where
+        #     it left off (persistent _lpenv_t_s timer, not reset on every render call)
+        #
+        # SA reference: slider=0.5 → base 1100 Hz, peak ~3100 Hz.
+        #               At session open the pad is warm and bright immediately.
+        #
+        # If chord_id changes, reset the swell timer to trigger a new bloom.
+        if chord_id is not None and chord_id != self._last_chord_id:
+            self._lpenv_t_s = 0.0
+            self._last_chord_id = chord_id
+            # Do NOT reset _lpf_zi here. The filter output is continuous — it
+            # will smoothly track the new peak_hz cutoff from its current state.
+            # Resetting zi to None forces the filter output to jump discontinuously
+            # to a zero initial condition, which creates an audible click.
+
+        base_hz  = cutoff                   # filter rests at slider value
+        peak_hz  = cutoff * 2.83            # ~1.5 octaves above (2^1.5 = 2.83)
+        decay_s  = 0.80                     # slow swell — holds brightness ~0.8s
+
+        seg_len = max(1, n_samples // 8)
         zi_l = self._lpf_zi_l
         zi_r = self._lpf_zi_r
         for seg in range(8):
             s = seg * seg_len
             e = s + seg_len if seg < 7 else n_samples
-            mid = s + (e - s) // 2
-            env_01 = min(float(env[mid]) / env_01_scale, 1.0)
-            seg_cutoff = base_hz + (peak_hz - base_hz) * env_01
-            seg_cutoff = max(50.0, min(seg_cutoff, self.sr * 0.45))
+            if s >= n_samples:
+                break
+            mid_t    = self._lpenv_t_s + (s + (e - s) // 2) / self.sr
+            swell_01 = float(np.exp(-mid_t / decay_s))   # 1.0 at trigger → 0.0 as time grows
+            seg_cutoff = base_hz + (peak_hz - base_hz) * swell_01
+            seg_cutoff = float(np.clip(seg_cutoff, 50.0, self.sr * 0.45))
             buf_l[s:e], zi_l = lpf(buf_l[s:e], seg_cutoff, self.sr, zi_l)
             buf_r[s:e], zi_r = lpf(buf_r[s:e], seg_cutoff, self.sr, zi_r)
+        self._lpenv_t_s  += n_samples / self.sr   # advance the swell timer
         self._lpf_zi_l = zi_l
         self._lpf_zi_r = zi_r
 
-        # Trancegate — use cumulative sample count for phase continuity across bars.
-        # bar_offset_samples is used for intra-bar step onsets (lead per-step rendering);
-        # for bar-by-bar pad rendering, _samples_rendered tracks the global phase.
+        # Trancegate — global_offset_samples anchors the gate phase to absolute
+        # session time (bar * spb), so the gate is in phase with the kick regardless
+        # of which bar the pad entered on. bar_offset_samples adds intra-bar offset
+        # for per-step rendering (used by lead; pad always passes 0).
         gate = trancegate(n_samples, self.sr, spb,
-                          bar_offset_samples=self._samples_rendered + bar_offset_samples,
+                          bar_offset_samples=global_offset_samples + bar_offset_samples,
                           speed=TRANCEGATE_SPEED, amount=TRANCEGATE_AMOUNT)
         buf_l *= gate
         buf_r *= gate
-        self._samples_rendered += n_samples
 
         # FDN reverb
         buf_l, buf_r = self._fdn.process(buf_l, buf_r)

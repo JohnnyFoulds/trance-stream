@@ -88,14 +88,13 @@ PAD_VOICING_OFFSETS = [0, -14, -21]
 # Source: docs/music_theory/04_generative_melody.md §2
 SA_NOTEARP_PATTERN = [-1, -1, -1, -1, 0, -1, -1, -1, 0, 1, 1, 0, 1, 0, 1, 0]
 
-# SA's bstruct bass pattern: <row_a row_b>*16 — two alternating 16-step rows.
-# Decoded from bstruct mini-notation: 1=onset, 0=continuation/rest.
-# Row A (11 onsets, syncopated): every 16th with some held notes
-# Row B (dense, ~every step): busier version
-# We encode as active 16th positions (0-indexed) per row.
-# Source: docs/music_theory/02_sa_vocabulary_codified.md §7 (bstruct analysis)
-BASS_STEPS_A = [0, 1, 2, 4, 5, 7, 8, 9, 11, 13, 14]   # 11 onsets — sparse row
-BASS_STEPS_B = [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]  # 14 onsets — dense row
+# SA's acid bass: short acidenv hits with clear gaps between them.
+# Each onset fires a fresh acidenv (~80-150ms decay); consecutive steps with
+# step_dur=sp16*2 would merge into a drone — so these patterns have minimum
+# gap of 2 between any two consecutive onsets.
+# Source: docs/music_theory/02_sa_vocabulary_codified.md §7
+BASS_STEPS_A = [0, 3, 6, 9, 12]           # 5-hit quarter-note feel, even spacing
+BASS_STEPS_B = [0, 2, 5, 7, 10, 13, 15]  # 7-hit syncopated, no consecutive steps
 
 # ---------------------------------------------------------------------------
 # DRUM PATTERNS
@@ -120,7 +119,7 @@ HIHAT_DECAY_S_MAX     = 0.12
 # Source: docs/music_theory/03_trance_rhythm.md §4
 TRANCEGATE_SPEED  = 1.5    # cycles per bar — creates 3/2 polyrhythm vs 4/4
 TRANCEGATE_ANGLE  = 45.0   # degrees — cosine shape, equal rise/fall time
-TRANCEGATE_AMOUNT = 1.0    # full depth
+TRANCEGATE_AMOUNT = 0.7    # depth: trough=0.3, peak=1.0 — breathes without going silent
 
 # ---------------------------------------------------------------------------
 # SIDECHAIN

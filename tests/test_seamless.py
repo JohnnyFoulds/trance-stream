@@ -126,13 +126,15 @@ def test_pad_bar_boundary_jump():
 
     pad = SupersawPad(root_midi=48, sr=SR, saw_count=5, detune_cents=60.0)
     bars = []
-    for _ in range(8):
-        l, _ = pad.render([48], SPB, cutoff_slider=0.5)
+    for bar in range(8):
+        # global_offset_samples must advance bar-by-bar for correct trancegate phase.
+        l, _ = pad.render([48], SPB, cutoff_slider=0.5, global_offset_samples=bar * SPB)
         bars.append(l)
 
-    # FDN reverb introduces block-level feedback artifacts at bar boundaries;
-    # allow up to 0.10 for a pad-in-isolation test (full mix uses silence-gap tests).
-    PAD_JUMP_THRESHOLD = 0.10
+    # FDN reverb extends signal across bar boundaries (legitimately).
+    # The test guards against the oscillator-phase-reset bug (produces jumps > 0.4)
+    # and LP filter state discontinuities. Smooth trancegate transitions are fine.
+    PAD_JUMP_THRESHOLD = 0.15
     jumps = _bar_boundary_jumps(bars)
     bad = [(i, j) for i, j in enumerate(jumps) if j > PAD_JUMP_THRESHOLD]
     assert not bad, (

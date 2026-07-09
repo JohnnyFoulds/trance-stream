@@ -80,3 +80,30 @@ def notearp_pattern(chord_midi_notes: list[int]) -> StepPattern:
             note = chord_midi_notes[idx % len(chord_midi_notes)] if chord_midi_notes else 60
             notes.append(note)
     return StepPattern(steps=steps, notes=notes)
+
+
+def lead_melody_pattern(chord_midi_notes: list[int], bar: int) -> StepPattern:
+    """SA's lead melody pattern — sparse 2-note phrase with bar-cycling notes.
+
+    Derived from SA's "@@2 <-7 [-5 -2]>@3 <0 -3 2 1>@3".add 7:
+    - @@2 (weight 2): rest for first 4 sixteenth-notes (steps 0–3)
+    - <...>@3 (weight 3): note at step 4, sustained 6 sixteenth-notes
+    - <...>@3 (weight 3): note at step 10, sustained 6 sixteenth-notes
+
+    Step 4 note alternates each bar (< > cycling):
+      even bars: chord[0]
+      odd bars:  chord[1 % n]  — the fifth, or same note if monophonic
+
+    Step 10 note cycles every 4 bars (<0 -3 2 1> mapped to available chord tones):
+      bar%4==0: chord[0]
+      bar%4==1: chord[1 % n]
+      bar%4==2: chord[0]  — back to root for a question-answer phrase shape
+      bar%4==3: chord[1 % n]
+
+    All notes should already be transposed +12 by the caller (SA's .add 7).
+    Source: docs/music_theory/02_sa_vocabulary_codified.md §3 (lead melody analysis)
+    """
+    n = max(len(chord_midi_notes), 1)
+    note_4  = chord_midi_notes[bar % 2 % n]
+    note_10 = chord_midi_notes[(bar % 4 // 2) % n]   # 0→0, 1→0, 2→1, 3→1 in 2-tone chord
+    return StepPattern(steps=[4, 10], notes=[note_4, note_10])
