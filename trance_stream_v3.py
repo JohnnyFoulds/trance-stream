@@ -312,15 +312,56 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
             if item is SENTINEL:
                 break
             bar_idx, bar_l, bar_r, render_ms = item
-            stereo = np.column_stack([bar_l, bar_r])
-            stream.write(stereo)
             if viz:
+                # Full-frame update at bar boundary (CA, filter, etc.)
                 viz.update(_make_bar_info(bar_idx, renderer.song, render_ms, bar_dur_ms))
                 renderer.ca_state = {
                     'density':        viz.ca_density(),
                     'voicing_offset': viz.ca_voicing_offset(),
                 }
+                # Sub-bar tick: stream 16 sixteenth-note steps individually,
+                # flashing track indicators on each instrument's actual hits.
+                song = renderer.song
+                sb   = song.stage_bars
+                from song.theory import (
+                    KICK_STEPS_BASIC, KICK_STEPS_SYNCOPATED,
+                    CLAP_STEPS_BACKBEAT, HIHAT_STEPS,
+                    HIHAT_STEPS_OFFBEAT, HIHAT_STEPS_SPARSE,
+                    BASS_STEPS_A, BASS_STEPS_B,
+                )
+                kick_steps  = (KICK_STEPS_SYNCOPATED
+                               if bar_idx >= sb.get('kick_syncopated', 9999)
+                               else KICK_STEPS_BASIC)
+                hihat_pat   = getattr(song, 'hihat_pattern', 'full')
+                hihat_steps = (HIHAT_STEPS_OFFBEAT if hihat_pat == 'offbeat'
+                               else HIHAT_STEPS_SPARSE if hihat_pat == 'sparse'
+                               else HIHAT_STEPS)
+                ca_dense    = renderer.ca_state.get('density', 0.5) > 0.55
+                bass_steps  = (BASS_STEPS_B if ca_dense
+                               else BASS_STEPS_A if bar_idx % 2 == 0
+                               else BASS_STEPS_B)
+                # Lead fires on steps 4 and 10 once melody is active
+                lead_steps  = ([4, 10] if bar_idx >= sb.get('lead_melody_on', 9999)
+                               else [0])
+
+                for step in range(16):
+                    onset = step * sp16
+                    end   = onset + sp16
+                    chunk = np.column_stack([bar_l[onset:end], bar_r[onset:end]])
+                    stream.write(chunk)
+                    hit_map = {
+                        'kick':  bar_idx >= sb.get('kick_on',       0)    and step in kick_steps,
+                        'pad':   bar_idx >= sb.get('pad_root_on',   9999) and step == 0,
+                        'bass':  bar_idx >= sb.get('bass_on',       9999) and step in bass_steps,
+                        'lead':  bar_idx >= sb.get('lead_root_on',  9999) and step in lead_steps,
+                        'hihat': bar_idx >= sb.get('hihat_on',      9999) and step in hihat_steps,
+                        'clap':  bar_idx >= sb.get('clap_on',       9999) and step in CLAP_STEPS_BACKBEAT,
+                        'pulse': bar_idx >= sb.get('pulse_on',      9999) and step % 4 == 0,
+                    }
+                    viz.tick(hit_map)
             else:
+                stereo = np.column_stack([bar_l, bar_r])
+                stream.write(stereo)
                 print(f"  bar {bar_idx + 1:4d}/{bars_label}  render={render_ms:.0f}ms  "
                       f"budget={bar_dur_ms:.0f}ms  "
                       f"headroom={bar_dur_ms - render_ms:.0f}ms",
@@ -328,7 +369,8 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
             all_l.append(bar_l)
             all_r.append(bar_r)
             if wav_file is not None:
-                pcm = (np.clip(stereo, -1, 1) * 32767).astype(np.int16)
+                wav_stereo = np.column_stack([bar_l, bar_r])
+                pcm = (np.clip(wav_stereo, -1, 1) * 32767).astype(np.int16)
                 wav_file.writeframes(pcm.tobytes())
 
     except KeyboardInterrupt:

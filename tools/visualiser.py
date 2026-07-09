@@ -196,6 +196,10 @@ def _ca_next(state: np.ndarray, rule: int = 30) -> np.ndarray:
 _FIXED_LINES_WIDE   = 13   # top + hdr + div + info + div + tracks + div + filt + gate + div + timing + div + bottom
 _FIXED_LINES_NARROW = 11   # same minus timing+div
 
+# Row number (1-indexed) of the tracks indicator line within the full display.
+# top(1) hdr(2) div(3) info(4) div(5) tracks(6)
+_TRACKS_ROW = 6
+
 class Visualiser:
     """Full-screen ANSI terminal visualiser.
 
@@ -219,6 +223,7 @@ class Visualiser:
         # Rows may differ in width if the terminal was resized; the renderer
         # handles that by cropping/padding each row to the current ca_inner.
         self._ca_history: deque = deque(maxlen=200)
+        self._last_info: Optional[BarInfo] = None
 
     def start(self) -> None:
         sys.stdout.write(_HIDE_CURSOR + _CLEAR + _HOME)
@@ -228,6 +233,57 @@ class Visualiser:
         cols, rows = shutil.get_terminal_size((80, 24))
         # Place cursor well below the last line we wrote and restore terminal.
         sys.stdout.write(f'\033[{rows};0H' + _SHOW_CURSOR + _RESET + '\n')
+        sys.stdout.flush()
+
+    def tick(self, hit_map: dict) -> None:
+        """Overwrite the track indicator line in-place for sub-bar flicker.
+
+        hit_map  — dict mapping track name to True (hit this step) or False.
+        Active tracks that are hit this step show bright green ●.
+        Active tracks not hit show dim green ●.
+        Inactive tracks show dim ○ regardless.
+
+        Uses absolute cursor positioning so only the one line is redrawn —
+        no full-frame refresh, no flicker in the rest of the display.
+        """
+        if not self._last_info:
+            return
+        info = self._last_info
+        cols, _ = shutil.get_terminal_size((80, 24))
+        wide = cols >= 100
+        inner = cols - 6
+
+        def dot(name: str, short: str = None) -> str:
+            label = (short or name).upper()
+            active = info.tracks_active.get(name, False)
+            if not active:
+                return f'{_DIM}{label} ○{_RESET}' if wide else f'{_DIM}{short}○{_RESET}'
+            if hit_map.get(name, False):
+                # Bright flash on hit
+                return (f'{label} {_BOLD}{_GREEN}●{_RESET}' if wide
+                        else f'{_BOLD}{_GREEN}{short}●{_RESET}')
+            else:
+                # Dim between hits — still shows it's active, just not firing
+                return (f'{_DIM}{label} {_GREEN}●{_RESET}' if wide
+                        else f'{_DIM}{_GREEN}{short}●{_RESET}')
+
+        if wide:
+            tracks_row = '   '.join([
+                dot('kick'), dot('pad'), dot('bass'), dot('lead'),
+                dot('hihat'), dot('clap'), dot('pulse'),
+            ])
+        else:
+            tracks_row = '  '.join([
+                dot('kick', 'K'), dot('pad', 'P'), dot('bass', 'B'), dot('lead', 'L'),
+                dot('hihat', 'H'), dot('clap', 'C'), dot('pulse', 'U'),
+            ])
+
+        visible = _strip_ansi(tracks_row)
+        pad = max(0, inner - len(visible))
+        line = f'{_V}  {tracks_row}{" " * pad}  {_V}'
+
+        # Move cursor to tracks row, overwrite, return cursor to bottom
+        sys.stdout.write(f'\033[{_TRACKS_ROW};1H{line}')
         sys.stdout.flush()
 
     def update(self, info: BarInfo) -> None:
@@ -278,6 +334,7 @@ class Visualiser:
         # Keep history buffer at most as deep as we'll ever display + a small pad
         self._ca_history = deque(self._ca_history, maxlen=max(ca_lines + 4, 200))
 
+        self._last_info = info
         lines = self._render(info, cols, rows, wide, ca_lines)
 
         sys.stdout.write(_HOME)
