@@ -231,19 +231,24 @@ def test_lead_not_silent():
     assert rms(l) > 0.0001, f"Lead is silent: rms={rms(l)}"
 
 
-def test_lead_fm_raises_high_mid_energy():
-    """FM modulation should increase energy in the 2k–8k band."""
+def test_lead_fm_raises_sub_harmonic_energy():
+    """FM (ratio 1:2) adds sub-harmonic warmth in the 100–800 Hz band.
+
+    SA's fm .5 uses modulator at 0.5× carrier. For C4 (261 Hz) the sidebands
+    land at ~130 Hz, ~392 Hz, ~653 Hz — all in the 100–800 Hz band.
+    This is warm enrichment, not the reed-timbre 2k–8k energy from ratio 4:1.
+    """
     from instruments.lead import AcidLead
 
     lead_no_fm   = AcidLead(root_midi=55)
     lead_with_fm = AcidLead(root_midi=55)
     l_no,   _ = lead_no_fm.render([60],   SPB, fm_depth=0.0)
     l_with, _ = lead_with_fm.render([60], SPB, fm_depth=0.55)
-    hi_no   = band_energy_ratio(l_no,   2000, 8000)
-    hi_with = band_energy_ratio(l_with, 2000, 8000)
-    assert hi_with >= hi_no, (
-        f"FM should not decrease hi-mid energy: "
-        f"no_fm={hi_no:.4f} with_fm={hi_with:.4f}"
+    lo_no   = band_energy_ratio(l_no,   100, 800)
+    lo_with = band_energy_ratio(l_with, 100, 800)
+    assert lo_with >= lo_no, (
+        f"FM (ratio 1:2) should raise 100–800 Hz sub-harmonic energy: "
+        f"no_fm={lo_no:.4f} with_fm={lo_with:.4f}"
     )
 
 

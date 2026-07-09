@@ -108,20 +108,23 @@ class AcidLead:
                                 saw_count=self._saw_count,
                                 detune_cents=self._detune_cents)
             if fm_depth > 0.0:
-                # True phase-modulation FM: modulator at 4× carrier frequency creates
-                # sidebands at carrier ± n·mod_freq landing prominently in 2k-8k Hz
-                # (e.g. carrier=262 Hz, mod=1048 Hz → sideband n=2: 2358 Hz).
-                # FM voice is ADDED to (not replacing) the supersaw so high harmonics
-                # from the supersaw are preserved.  mod_index scales with fm_depth.
+                # SA's fm .5: modulator at 0.5× carrier (ratio 1:2), index ≈ 0.5.
+                # Ratio 1:2 places sidebands at 0.5×, 1.5×, 2.5× carrier —
+                # sub-harmonics that warm the tone without creating odd-partial
+                # reed/harmonica character (which comes from ratio 4:1 + high index).
                 carrier_freq = 440.0 * 2.0 ** ((note - 69) / 12.0)
-                mod_freq  = carrier_freq * 4.0
-                mod_index = fm_depth * 4.0      # index 0 → 1.65 at max fm_depth
+                mod_freq  = carrier_freq * 0.5
+                mod_index = fm_depth * 1.0      # index 0 → 0.55 at max fm_depth
                 phase_mod = mod_index * np.sin(2.0 * np.pi * mod_freq * t)
                 fm_voice  = (np.sin(2.0 * np.pi * carrier_freq * t + phase_mod)
                               .astype(np.float32))
-                # Add FM voice at 30% weight to enrich harmonics without obscuring the saw
-                l = (l + fm_voice * 0.3).astype(np.float32)
-                r = (r + fm_voice * 0.3).astype(np.float32)
+                # Scale FM voice to 20% of the supersaw RMS so it enriches
+                # without dominating regardless of the saw's output level.
+                saw_rms = float(np.sqrt(np.mean(l ** 2))) or 1e-6
+                fm_rms  = float(np.sqrt(np.mean(fm_voice ** 2))) or 1e-6
+                fm_weight = (saw_rms * 0.20) / fm_rms
+                l = (l + fm_voice * fm_weight).astype(np.float32)
+                r = (r + fm_voice * fm_weight).astype(np.float32)
             buf_l += l / n_notes
             buf_r += r / n_notes
 
