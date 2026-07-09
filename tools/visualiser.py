@@ -235,7 +235,7 @@ class Visualiser:
         cols, rows = shutil.get_terminal_size((80, 24))
         wide   = cols >= 100
         # CA width = full usable inner width (label is overlaid, not appended)
-        ca_w = max(8, cols - 4)
+        ca_w = max(8, cols - 6)
 
         # Resize CA array when terminal width changes, carrying live state across.
         if ca_w != self._ca_width:
@@ -315,12 +315,12 @@ class Visualiser:
     # ------------------------------------------------------------------
     def _render(self, info: BarInfo, cols: int, rows: int,
                 wide: bool, ca_lines: int) -> list[str]:
-        inner = cols - 5   # usable width: ║(1) + sp(2) + content + sp(1) + ║(1)
+        inner = cols - 6   # usable width: ║(1) + sp(2) + content + sp(2) + ║(1)
 
         def row(content: str) -> str:
             visible = _strip_ansi(content)
             pad = max(0, inner - len(visible))
-            return f'{_V}  {content}{" " * pad} {_V}'
+            return f'{_V}  {content}{" " * pad}  {_V}'
 
         def divider() -> str:
             return f'{_ML}{_H * (cols - 2)}{_MR}'
@@ -442,11 +442,11 @@ class Visualiser:
                 # Newest row: trim rightmost cells to make room for the
                 # label. Label is dim — reads as ambient metadata, not
                 # competing with the CA pattern.
-                # Layout: ║(1) + sp(2) + cells(ca_inner - 7) + label(7) + ║(1) = cols
+                # Layout: ║(1) + sp(2) + cells(ca_inner - 7) + label(7) + sp(2) + ║(1) = cols
                 cells_w = ca_inner - len(label_txt)
                 ca_rendered.append(
                     f'{_V}  {bright}{ca_color}{raw[:cells_w]}{_RESET}'
-                    f'{_DIM}{label_txt}{_RESET} {_V}'
+                    f'{_DIM}{label_txt}{_RESET}  {_V}'
                 )
             else:
                 ca_rendered.append(row(content))
