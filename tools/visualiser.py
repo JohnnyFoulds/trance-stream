@@ -289,12 +289,12 @@ class Visualiser:
     # ------------------------------------------------------------------
     def _render(self, info: BarInfo, cols: int, rows: int,
                 wide: bool, ca_lines: int) -> list[str]:
-        inner = cols - 4   # usable width inside ║  …  ║
+        inner = cols - 5   # usable width: ║(1) + sp(2) + content + sp(1) + ║(1)
 
         def row(content: str) -> str:
             visible = _strip_ansi(content)
             pad = max(0, inner - len(visible))
-            return f'{_V}  {content}{" " * pad}{_V}'
+            return f'{_V}  {content}{" " * pad} {_V}'
 
         def divider() -> str:
             return f'{_ML}{_H * (cols - 2)}{_MR}'
@@ -420,7 +420,7 @@ class Visualiser:
                 cells_w = ca_inner - len(label_txt)
                 ca_rendered.append(
                     f'{_V}  {bright}{ca_color}{raw[:cells_w]}{_RESET}'
-                    f'{_DIM}{label_txt}{_RESET}{_V}'
+                    f'{_DIM}{label_txt}{_RESET} {_V}'
                 )
             else:
                 ca_rendered.append(row(content))
