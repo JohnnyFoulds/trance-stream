@@ -247,7 +247,8 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
         return buf_l, buf_r
 
     sr  = renderer.song.sr
-    spb = renderer._spb
+    spb  = renderer._spb
+    sp16 = renderer._sp16
 
     all_l: list[np.ndarray] = []
     all_r: list[np.ndarray] = []
