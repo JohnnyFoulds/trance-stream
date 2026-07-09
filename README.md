@@ -40,6 +40,11 @@ python trance_stream_v3.py [OPTIONS]
 
       --stream          Real-time bar-by-bar playback, runs forever. Ctrl-C to stop.
 
+      --viz             Full-screen text visualiser while streaming.
+                        Shows chord, filter arc, active tracks, trancegate phase,
+                        and a Rule-30 cellular automaton animation.
+                        Only valid with --stream.
+
       --wav PATH        Write output to a WAV file (default when not streaming:
                         /tmp/trance_v3.wav)
 

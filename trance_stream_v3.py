@@ -62,6 +62,9 @@ def main():
     parser.add_argument("--stream",  action="store_true",
                         help="Real-time bar-by-bar playback — render and play simultaneously "
                              "(requires sounddevice). Ctrl-C to stop.")
+    parser.add_argument("--viz",     action="store_true",
+                        help="Show full-screen text visualiser while streaming. "
+                             "Only valid with --stream.")
     parser.add_argument("--solo", nargs="+", metavar="TRACK",
                         help="Solo one or more tracks; all others are muted. "
                              "Track names: kick pad lead bass hihat clap pulse")
@@ -106,7 +109,8 @@ def main():
     midi_path = args.out_midi or (None if args.stream else "/tmp/trance_v3.mid")
 
     if args.stream:
-        buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path)
+        buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path,
+                                    use_viz=args.viz)
     else:
         print(f"Rendering {n_bars} bars...")
         buf_l, buf_r = renderer.render_bars(n_bars)
@@ -217,7 +221,7 @@ def main():
 
 
 def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
-                 wav_path: str | None) -> tuple:
+                 wav_path: str | None, use_viz: bool = False) -> tuple:
     """Render and play back bar-by-bar in real time.
 
     Each bar is rendered (~0.28s at 6× realtime) then written to the audio
@@ -288,8 +292,19 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
                              latency='low')
     stream.start()
     bars_label = f"{n_bars}" if n_bars is not None else "∞"
-    print(f"Streaming {bars_label} bars in real time — Ctrl-C to stop.")
     bar_dur_ms = spb / sr * 1000
+
+    # Set up visualiser (if requested)
+    viz = None
+    _make_bar_info = None
+    if use_viz:
+        import sys as _sys
+        _sys.path.insert(0, str(REPO_ROOT / "tools"))
+        from visualiser import Visualiser, make_bar_info as _make_bar_info
+        viz = Visualiser(renderer.song, n_bars)
+        viz.start()
+    else:
+        print(f"Streaming {bars_label} bars in real time — Ctrl-C to stop.")
 
     try:
         while True:
@@ -297,12 +312,15 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
             if item is SENTINEL:
                 break
             bar_idx, bar_l, bar_r, render_ms = item
-            print(f"  bar {bar_idx + 1:4d}/{bars_label}  render={render_ms:.0f}ms  "
-                  f"budget={bar_dur_ms:.0f}ms  "
-                  f"headroom={bar_dur_ms - render_ms:.0f}ms",
-                  end='\r')
             stereo = np.column_stack([bar_l, bar_r])
             stream.write(stereo)
+            if viz:
+                viz.update(_make_bar_info(bar_idx, renderer.song, render_ms, bar_dur_ms))
+            else:
+                print(f"  bar {bar_idx + 1:4d}/{bars_label}  render={render_ms:.0f}ms  "
+                      f"budget={bar_dur_ms:.0f}ms  "
+                      f"headroom={bar_dur_ms - render_ms:.0f}ms",
+                      end='\r')
             all_l.append(bar_l)
             all_r.append(bar_r)
             if wav_file is not None:
@@ -310,7 +328,10 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
                 wav_file.writeframes(pcm.tobytes())
 
     except KeyboardInterrupt:
-        print(f"\nStopped at bar {len(all_l)}.")
+        if viz:
+            viz.stop()
+        else:
+            print(f"\nStopped at bar {len(all_l)}.")
         stop_event.set()
         while not audio_queue.empty():
             try: audio_queue.get_nowait()
@@ -320,6 +341,8 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
         render_t.join(timeout=2.0)
         stream.stop()
         stream.close()
+        if viz:
+            viz.stop()
         if wav_file is not None:
             wav_file.close()
             print(f"\nWAV saved → {wav_path}")
