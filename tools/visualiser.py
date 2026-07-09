@@ -253,17 +253,24 @@ class Visualiser:
         wide = cols >= 100
         inner = cols - 6
 
+        # Percussive voices go ○ between hits — shows the rhythm pattern.
+        # Sustained voices stay dim ● — they're always ringing, just not retriggering.
+        _PERCUSSIVE = {'kick', 'hihat', 'clap', 'bass'}
+
         def dot(name: str, short: str = None) -> str:
             label = (short or name).upper()
             active = info.tracks_active.get(name, False)
+            hitting = hit_map.get(name, False)
             if not active:
                 return f'{_DIM}{label} ○{_RESET}' if wide else f'{_DIM}{short}○{_RESET}'
-            if hit_map.get(name, False):
-                # Bright flash on hit
+            if hitting:
                 return (f'{label} {_BOLD}{_GREEN}●{_RESET}' if wide
                         else f'{_BOLD}{_GREEN}{short}●{_RESET}')
+            elif name in _PERCUSSIVE:
+                # Empty between hits — rhythm visible
+                return f'{label} ○' if wide else f'{short}○'
             else:
-                # Dim between hits — still shows it's active, just not firing
+                # Sustained — dim dot shows it's active and droning
                 return (f'{_DIM}{label} {_GREEN}●{_RESET}' if wide
                         else f'{_DIM}{_GREEN}{short}●{_RESET}')
 
