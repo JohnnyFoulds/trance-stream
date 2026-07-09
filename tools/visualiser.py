@@ -200,19 +200,17 @@ class Visualiser:
     stop() on exit to restore the terminal.
     """
 
-    CA_WIDTH = 32
-
     def __init__(self, song, n_bars: Optional[int] = None):
         self.song   = song
         self.n_bars = n_bars
-        # Seed CA from root_midi for determinism
-        rng = np.random.default_rng(song.root_midi)
-        self._ca = rng.integers(0, 2, size=self.CA_WIDTH, dtype=np.int32)
+        # CA width adapts to terminal width — initialised on first update().
+        self._ca: np.ndarray = np.zeros(0, dtype=np.int32)
+        self._ca_width: int  = 0
         self._prev_chord_idx = -1
         self._fm_ever_active = False
-        # Rolling history: each entry is (ca_row_copy, filter_slider)
-        # so we can colour each row by the energy at that moment.
-        # maxlen is updated dynamically in update(); start generous.
+        # Rolling history: each entry is (ca_row_copy, filter_slider).
+        # Rows may differ in width if the terminal was resized; the renderer
+        # handles that by cropping/padding each row to the current ca_inner.
         self._ca_history: deque = deque(maxlen=200)
 
     def start(self) -> None:
@@ -227,26 +225,45 @@ class Visualiser:
 
     def update(self, info: BarInfo) -> None:
         """Advance CA, record history, re-render the full display in place."""
-        # Inject musical events into CA before advancing
+        cols, rows = shutil.get_terminal_size((80, 24))
+        wide   = cols >= 100
+        # CA width = usable inner width minus label overhead ("  Rule 30" = 9, "  R30" = 5)
+        label_len = 9 if wide else 5
+        ca_inner  = (cols - 4) - label_len   # inner = cols-4; minus label
+        ca_w      = max(8, ca_inner)
+
+        # Resize CA array when terminal width changes, carrying live state across.
+        if ca_w != self._ca_width:
+            rng = np.random.default_rng(self.song.root_midi + ca_w)
+            new_ca = rng.integers(0, 2, size=ca_w, dtype=np.int32)
+            # Overlay existing state into centre of new array for continuity
+            if self._ca_width > 0:
+                copy_w = min(self._ca_width, ca_w)
+                offset = (ca_w - copy_w) // 2
+                new_ca[offset: offset + copy_w] = self._ca[:copy_w]
+            self._ca = new_ca
+            self._ca_width = ca_w
+
+        # Inject musical events into CA before advancing.
+        # Events are spread across the full width proportionally.
+        mid = ca_w // 2
         if info.chord_idx != self._prev_chord_idx and self._prev_chord_idx >= 0:
-            self._ca[0] = 1  # chord change marker
+            self._ca[0] = 1              # chord change: left edge
         self._prev_chord_idx = info.chord_idx
 
         if info.fm_depth > 0 and not self._fm_ever_active:
-            self._ca[5] = 1  # FM onset marker
+            self._ca[mid] = 1            # FM onset: centre
             self._fm_ever_active = True
 
-        # 4-bar phrase marker
-        self._ca[11] = 1 if info.bar_idx % 4 == 0 else 0
+        # 4-bar phrase marker: inject near-centre so it seeds both flanks
+        phrase_pos = max(0, mid - ca_w // 8)
+        self._ca[phrase_pos] = 1 if info.bar_idx % 4 == 0 else 0
 
         # Advance CA one step
         self._ca = _ca_next(self._ca)
 
         # Record this row in history (copy + current energy colour tag)
         self._ca_history.append((self._ca.copy(), info.filter_slider))
-
-        cols, rows = shutil.get_terminal_size((80, 24))
-        wide = cols >= 100
 
         # Compute how many CA history lines fit given the fixed UI chrome.
         fixed = _FIXED_LINES_WIDE if wide else _FIXED_LINES_NARROW
@@ -348,27 +365,31 @@ class Visualiser:
             gate_row = f'Gate   {_DIM}{gate_str}{_RESET}'
 
         # ── CA spacetime diagram ──────────────────────────────────────
-        # Each line in the history becomes one terminal row (oldest top, newest bottom).
-        # Cell width: scale 32 cells to fill (inner - label_overhead) columns.
+        # One terminal character per CA cell at the current terminal width.
+        # History rows may be narrower/wider than ca_inner if the terminal
+        # was resized mid-session — crop or pad each stored row to fit.
         ca_label   = '  Rule 30' if wide else '  R30'
-        ca_inner   = inner - len(ca_label)
-        cell_w     = max(1, ca_inner // self.CA_WIDTH)
+        ca_inner   = inner - len(ca_label)   # characters available for CA cells
 
         history_slice = list(self._ca_history)[-ca_lines:]
-        # Pad top with blank rows if we have fewer bars than ca_lines
-        blank_row_str = f'{_DIM}{"░" * (self.CA_WIDTH * cell_w)}{_RESET}'
-        blank_row_str = blank_row_str[: ca_inner]
+        blank_row_str = f'{_DIM}{"░" * ca_inner}{_RESET}'
         pad_count = ca_lines - len(history_slice)
 
         ca_rendered = []
         for i, (ca_row, fslider) in enumerate(history_slice):
             age = len(history_slice) - i          # 1 = newest
             ca_color = _YELLOW if fslider > 0.6 else _CYAN
-            # Dim older rows slightly using ANSI dim for rows that aren't newest
-            prefix = '' if age == 1 else _DIM
-            ca_str = ''.join(('█' if c else '░') * cell_w for c in ca_row)[:ca_inner]
-            label  = ca_label if age == 1 else ' ' * len(ca_label)
-            ca_rendered.append(row(f'{prefix}{ca_color}{ca_str}{_RESET}{label}'))
+            prefix   = '' if age == 1 else _DIM
+
+            # Build cell string — 1 char per cell, then fit to ca_inner
+            raw = ''.join('█' if c else '░' for c in ca_row)
+            if len(raw) < ca_inner:
+                raw = raw + '░' * (ca_inner - len(raw))   # pad narrow rows
+            else:
+                raw = raw[:ca_inner]                       # crop wide rows
+
+            label = ca_label if age == 1 else ' ' * len(ca_label)
+            ca_rendered.append(row(f'{prefix}{ca_color}{raw}{_RESET}{label}'))
 
         # ── Assemble ──────────────────────────────────────────────────
         bottom = f'{_BL}{_H * (cols - 2)}{_BR}'
