@@ -20,8 +20,10 @@ Usage (from trance_stream_v3.py)::
 from __future__ import annotations
 
 import math
+import re
 import shutil
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -180,8 +182,19 @@ def _ca_next(state: np.ndarray, rule: int = 30) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Visualiser class
 # ---------------------------------------------------------------------------
+
+# Fixed UI lines (excluding the CA history section):
+#   top border, header, divider, info, divider, tracks, divider,
+#   filter, gate, divider, [timing (wide only),] divider, bottom border
+_FIXED_LINES_WIDE   = 13   # top + hdr + div + info + div + tracks + div + filt + gate + div + timing + div + bottom
+_FIXED_LINES_NARROW = 11   # same minus timing+div
+
 class Visualiser:
     """Full-screen ANSI terminal visualiser.
+
+    The CA history section expands to fill all available terminal rows.
+    The spacetime diagram scrolls upward — each bar adds a new row at the
+    bottom. The number of visible rows adapts live to terminal height.
 
     Call start() once before streaming, update(bar_info) each bar,
     stop() on exit to restore the terminal.
@@ -197,20 +210,23 @@ class Visualiser:
         self._ca = rng.integers(0, 2, size=self.CA_WIDTH, dtype=np.int32)
         self._prev_chord_idx = -1
         self._fm_ever_active = False
+        # Rolling history: each entry is (ca_row_copy, filter_slider)
+        # so we can colour each row by the energy at that moment.
+        # maxlen is updated dynamically in update(); start generous.
+        self._ca_history: deque = deque(maxlen=200)
 
     def start(self) -> None:
         sys.stdout.write(_HIDE_CURSOR + _CLEAR + _HOME)
         sys.stdout.flush()
 
     def stop(self) -> None:
-        # Move cursor below the display box and restore
         cols, rows = shutil.get_terminal_size((80, 24))
-        n_lines = 12  # max height of our display
-        sys.stdout.write(f'\033[{n_lines + 2};0H' + _SHOW_CURSOR + _RESET + '\n')
+        # Place cursor well below the last line we wrote and restore terminal.
+        sys.stdout.write(f'\033[{rows};0H' + _SHOW_CURSOR + _RESET + '\n')
         sys.stdout.flush()
 
     def update(self, info: BarInfo) -> None:
-        """Re-render the display in place for this bar."""
+        """Advance CA, record history, re-render the full display in place."""
         # Inject musical events into CA before advancing
         if info.chord_idx != self._prev_chord_idx and self._prev_chord_idx >= 0:
             self._ca[0] = 1  # chord change marker
@@ -226,118 +242,33 @@ class Visualiser:
         # Advance CA one step
         self._ca = _ca_next(self._ca)
 
-        cols, _ = shutil.get_terminal_size((80, 24))
+        # Record this row in history (copy + current energy colour tag)
+        self._ca_history.append((self._ca.copy(), info.filter_slider))
+
+        cols, rows = shutil.get_terminal_size((80, 24))
         wide = cols >= 100
 
-        lines = self._render_wide(info, cols) if wide else self._render_narrow(info, cols)
+        # Compute how many CA history lines fit given the fixed UI chrome.
+        fixed = _FIXED_LINES_WIDE if wide else _FIXED_LINES_NARROW
+        ca_lines = max(1, rows - fixed)
+
+        # Keep history buffer at most as deep as we'll ever display + a small pad
+        self._ca_history = deque(self._ca_history, maxlen=max(ca_lines + 4, 200))
+
+        lines = self._render(info, cols, rows, wide, ca_lines)
 
         sys.stdout.write(_HOME)
-        sys.stdout.write('\n'.join(lines) + '\n')
+        sys.stdout.write('\n'.join(lines))
+        # Don't add trailing newline — keep cursor inside the box.
         sys.stdout.flush()
 
     # ------------------------------------------------------------------
-    # Wide layout (≥ 100 cols)
+    # Unified renderer — wide and narrow share the same structure,
+    # differing only in label verbosity and whether timing row appears.
     # ------------------------------------------------------------------
-    def _render_wide(self, info: BarInfo, cols: int) -> list[str]:
-        inner = cols - 4   # space inside ║  …  ║
-
-        def row(content: str) -> str:
-            # Pad or truncate to inner width, then wrap in box chars + spaces
-            # Strip ANSI before measuring length
-            visible = _strip_ansi(content)
-            pad = max(0, inner - len(visible))
-            return f'{_V}  {content}{" " * pad}{_V}'
-
-        def divider() -> str:
-            return f'{_ML}{_H * (cols - 2)}{_MR}'
-
-        bars_label = f'{self.n_bars}' if self.n_bars is not None else '∞'
-        bar_num    = info.bar_idx + 1
-
-        # ── Header ────────────────────────────────────────────────────
-        top   = f'{_TL}{_H * (cols - 2)}{_TR}'
-        hdr   = f'{_BOLD}TRANCE-STREAM{_RESET}  seed={info.seed}  mood={info.mood}  {info.bpm:.0f} BPM'
-
-        # ── Bar / chord / filter / FM row ──────────────────────────────
-        fm_pct = int(info.fm_depth / 0.55 * 100) if info.fm_depth > 0 else 0
-        fm_bar = _mini_bar(info.fm_depth / 0.55, 10, _YELLOW)
-        info_row = (
-            f'Bar {_BOLD}{bar_num:4d}{_RESET}/{bars_label}'
-            f'  Chord: {_BOLD}{info.chord_name:<4}{_RESET}'
-            f'  Filter: {_CYAN}{info.filter_hz:6.0f}{_RESET} Hz'
-            f'  FM: {fm_bar} {fm_pct:3d}%'
-        )
-
-        # ── Track indicators ──────────────────────────────────────────
-        def dot(name: str, short: str = None) -> str:
-            label = (short or name).upper()
-            active = info.tracks_active.get(name, False)
-            if active:
-                return f'{label} {_GREEN}●{_RESET}'
-            else:
-                return f'{_DIM}{label} ○{_RESET}'
-
-        tracks_row = '   '.join([
-            dot('kick'), dot('pad'), dot('bass'), dot('lead'),
-            dot('hihat'), dot('clap'), dot('pulse'),
-        ])
-
-        # ── Filter bar ────────────────────────────────────────────────
-        # prefix "Filter  " = 8, suffix "  XXXXXX Hz" = 11 → bar_width = inner - 19
-        bar_width = max(8, inner - 19)
-        filt_filled = _bar(info.filter_slider / 0.877, bar_width, _CYAN)
-        filter_row = f'Filter  {filt_filled}  {_CYAN}{info.filter_hz:6.0f} Hz{_RESET}'
-
-        # ── Gate bar (position indicator) ─────────────────────────────
-        gate_width = bar_width
-        gate_val = (1.0 + math.cos(info.gate_phase * 2 * math.pi + math.pi)) / 2.0
-        floor = 1.0 - 0.7
-        gate_level = floor + gate_val * 0.7
-        gate_pos = int(info.gate_phase * gate_width)
-        gate_cells = ['░'] * gate_width
-        gate_cells[min(gate_pos, gate_width - 1)] = '●'
-        gate_str = ''.join(gate_cells)
-        gate_row = f'Gate    {_DIM}{gate_str}{_RESET}  {gate_level:.2f}'
-
-        # ── CA row ────────────────────────────────────────────────────
-        ca_color = _YELLOW if info.filter_slider > 0.6 else _CYAN
-        # Scale 32 cells to inner width
-        ca_inner = inner - 10
-        repeat = max(1, ca_inner // self.CA_WIDTH)
-        ca_str = ''.join(('█' if c else '░') * repeat for c in self._ca)[:ca_inner]
-        ca_row_str = f'{ca_color}{ca_str}{_RESET}  Rule 30'
-
-        # ── Timing row ────────────────────────────────────────────────
-        timing_row = (
-            f'{_DIM}render={info.render_ms:.0f}ms  '
-            f'budget={info.bar_dur_ms:.0f}ms  '
-            f'headroom={info.headroom_ms:.0f}ms{_RESET}'
-        )
-
-        bottom = f'{_BL}{_H * (cols - 2)}{_BR}'
-
-        return [
-            top,
-            row(hdr),
-            divider(),
-            row(info_row),
-            divider(),
-            row(tracks_row),
-            divider(),
-            row(filter_row),
-            row(gate_row),
-            divider(),
-            row(ca_row_str),
-            divider(),
-            row(timing_row),
-            bottom,
-        ]
-
-    # ------------------------------------------------------------------
-    # Narrow layout (< 100 cols)
-    # ------------------------------------------------------------------
-    def _render_narrow(self, info: BarInfo, cols: int) -> list[str]:
-        inner = cols - 4
+    def _render(self, info: BarInfo, cols: int, rows: int,
+                wide: bool, ca_lines: int) -> list[str]:
+        inner = cols - 4   # usable width inside ║  …  ║
 
         def row(content: str) -> str:
             visible = _strip_ansi(content)
@@ -351,47 +282,98 @@ class Visualiser:
         bar_num    = info.bar_idx + 1
         fm_pct     = int(info.fm_depth / 0.55 * 100) if info.fm_depth > 0 else 0
 
-        top    = f'{_TL}{_H * (cols - 2)}{_TR}'
+        # ── Header ────────────────────────────────────────────────────
+        top = f'{_TL}{_H * (cols - 2)}{_TR}'
+        if wide:
+            hdr = f'{_BOLD}TRANCE-STREAM{_RESET}  seed={info.seed}  mood={info.mood}  {info.bpm:.0f} BPM'
+        else:
+            hdr = f'{_BOLD}TRANCE-STREAM{_RESET}  {info.seed}/{info.mood}  {info.bpm:.0f} BPM'
+
+        # ── Info row ──────────────────────────────────────────────────
+        if wide:
+            fm_bar   = _mini_bar(info.fm_depth / 0.55, 10, _YELLOW)
+            info_row = (
+                f'Bar {_BOLD}{bar_num:4d}{_RESET}/{bars_label}'
+                f'  Chord: {_BOLD}{info.chord_name:<4}{_RESET}'
+                f'  Filter: {_CYAN}{info.filter_hz:6.0f}{_RESET} Hz'
+                f'  FM: {fm_bar} {fm_pct:3d}%'
+            )
+        else:
+            info_row = (
+                f'Bar {_BOLD}{bar_num}{_RESET}/{bars_label}'
+                f'  {_BOLD}{info.chord_name}{_RESET}'
+                f'  {_CYAN}{info.filter_hz:.0f}Hz{_RESET}'
+                f'  FM:{fm_pct}%'
+            )
+
+        # ── Track indicators ──────────────────────────────────────────
+        if wide:
+            def dot(name: str, short: str = None) -> str:
+                label = (short or name).upper()
+                active = info.tracks_active.get(name, False)
+                return (f'{label} {_GREEN}●{_RESET}' if active
+                        else f'{_DIM}{label} ○{_RESET}')
+            tracks_row = '   '.join([
+                dot('kick'), dot('pad'), dot('bass'), dot('lead'),
+                dot('hihat'), dot('clap'), dot('pulse'),
+            ])
+        else:
+            def dot(name: str, short: str) -> str:
+                active = info.tracks_active.get(name, False)
+                return (f'{short}{_GREEN}●{_RESET}' if active
+                        else f'{_DIM}{short}○{_RESET}')
+            tracks_row = '  '.join([
+                dot('kick', 'K'), dot('pad', 'P'), dot('bass', 'B'), dot('lead', 'L'),
+                dot('hihat', 'H'), dot('clap', 'C'), dot('pulse', 'U'),
+            ])
+
+        # ── Filter bar ────────────────────────────────────────────────
+        if wide:
+            bar_width  = max(8, inner - 19)
+            filt_row   = f'Filter  {_bar(info.filter_slider / 0.877, bar_width, _CYAN)}  {_CYAN}{info.filter_hz:6.0f} Hz{_RESET}'
+        else:
+            bar_width  = max(8, inner - 9)
+            filt_row   = f'Filter {_bar(info.filter_slider / 0.877, bar_width, _CYAN)}'
+
+        # ── Gate bar ──────────────────────────────────────────────────
+        gate_val   = (1.0 + math.cos(info.gate_phase * 2 * math.pi + math.pi)) / 2.0
+        gate_level = 0.3 + gate_val * 0.7
+        gate_pos   = int(info.gate_phase * bar_width)
+        gate_cells = ['░'] * bar_width
+        gate_cells[min(gate_pos, bar_width - 1)] = '●'
+        gate_str   = ''.join(gate_cells)
+        if wide:
+            gate_row = f'Gate    {_DIM}{gate_str}{_RESET}  {gate_level:.2f}'
+        else:
+            gate_row = f'Gate   {_DIM}{gate_str}{_RESET}'
+
+        # ── CA spacetime diagram ──────────────────────────────────────
+        # Each line in the history becomes one terminal row (oldest top, newest bottom).
+        # Cell width: scale 32 cells to fill (inner - label_overhead) columns.
+        ca_label   = '  Rule 30' if wide else '  R30'
+        ca_inner   = inner - len(ca_label)
+        cell_w     = max(1, ca_inner // self.CA_WIDTH)
+
+        history_slice = list(self._ca_history)[-ca_lines:]
+        # Pad top with blank rows if we have fewer bars than ca_lines
+        blank_row_str = f'{_DIM}{"░" * (self.CA_WIDTH * cell_w)}{_RESET}'
+        blank_row_str = blank_row_str[: ca_inner]
+        pad_count = ca_lines - len(history_slice)
+
+        ca_rendered = []
+        for i, (ca_row, fslider) in enumerate(history_slice):
+            age = len(history_slice) - i          # 1 = newest
+            ca_color = _YELLOW if fslider > 0.6 else _CYAN
+            # Dim older rows slightly using ANSI dim for rows that aren't newest
+            prefix = '' if age == 1 else _DIM
+            ca_str = ''.join(('█' if c else '░') * cell_w for c in ca_row)[:ca_inner]
+            label  = ca_label if age == 1 else ' ' * len(ca_label)
+            ca_rendered.append(row(f'{prefix}{ca_color}{ca_str}{_RESET}{label}'))
+
+        # ── Assemble ──────────────────────────────────────────────────
         bottom = f'{_BL}{_H * (cols - 2)}{_BR}'
 
-        hdr = f'{_BOLD}TRANCE-STREAM{_RESET}  {info.seed}/{info.mood}  {info.bpm:.0f} BPM'
-
-        info_row = (
-            f'Bar {_BOLD}{bar_num}{_RESET}/{bars_label}'
-            f'  {_BOLD}{info.chord_name}{_RESET}'
-            f'  {_CYAN}{info.filter_hz:.0f}Hz{_RESET}'
-            f'  FM:{fm_pct}%'
-        )
-
-        def dot(name: str, short: str) -> str:
-            active = info.tracks_active.get(name, False)
-            if active:
-                return f'{short}{_GREEN}●{_RESET}'
-            else:
-                return f'{_DIM}{short}○{_RESET}'
-
-        tracks_row = '  '.join([
-            dot('kick', 'K'), dot('pad', 'P'), dot('bass', 'B'), dot('lead', 'L'),
-            dot('hihat', 'H'), dot('clap', 'C'), dot('pulse', 'U'),
-        ])
-
-        bar_width = max(8, inner - 9)
-        filt_filled = _bar(info.filter_slider / 0.877, bar_width, _CYAN)
-        filter_row = f'Filter {filt_filled}'
-
-        gate_width = bar_width
-        gate_pos = int(info.gate_phase * gate_width)
-        gate_cells = ['░'] * gate_width
-        gate_cells[min(gate_pos, gate_width - 1)] = '●'
-        gate_row = f'Gate   {_DIM}{"".join(gate_cells)}{_RESET}'
-
-        ca_color = _YELLOW if info.filter_slider > 0.6 else _CYAN
-        ca_inner = inner - 10
-        repeat = max(1, ca_inner // self.CA_WIDTH)
-        ca_str = ''.join(('█' if c else '░') * repeat for c in self._ca)[:ca_inner]
-        ca_row_str = f'{ca_color}{ca_str}{_RESET}  R30'
-
-        return [
+        out = [
             top,
             row(hdr),
             divider(),
@@ -399,12 +381,28 @@ class Visualiser:
             divider(),
             row(tracks_row),
             divider(),
-            row(filter_row),
+            row(filt_row),
             row(gate_row),
             divider(),
-            row(ca_row_str),
-            bottom,
         ]
+
+        # Blank padding rows (before history fills up)
+        for _ in range(pad_count):
+            out.append(row(blank_row_str))
+
+        out.extend(ca_rendered)
+
+        if wide:
+            timing = (
+                f'{_DIM}render={info.render_ms:.0f}ms  '
+                f'budget={info.bar_dur_ms:.0f}ms  '
+                f'headroom={info.headroom_ms:.0f}ms{_RESET}'
+            )
+            out.append(divider())
+            out.append(row(timing))
+
+        out.append(bottom)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -427,5 +425,4 @@ def _mini_bar(frac: float, width: int, color: str) -> str:
 
 def _strip_ansi(s: str) -> str:
     """Remove ANSI escape codes to get the visible character count."""
-    import re
     return re.sub(r'\033\[[0-9;?]*[a-zA-Z]', '', s)
