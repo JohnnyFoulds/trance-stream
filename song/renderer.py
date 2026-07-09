@@ -202,16 +202,33 @@ class SongRenderer:
         # ── Bass ─────────────────────────────────────────────────────────────
         bass_track = self._get_track('bass')
         if bass_track and bass_track.is_active(bar):
-            # Play root of current chord, one octave below the pad root.
-            # Chord changes every cycle; bass follows root movement.
+            from song.theory import BASS_STEPS_A, BASS_STEPS_B, GAIN_BASS
+            # SA's bstruct: two alternating step patterns, bars alternate A/B.
+            bass_steps = BASS_STEPS_A if bar % 2 == 0 else BASS_STEPS_B
             bass_midi = chord_midi[0] - 12
-            bass_midi = max(24, min(60, bass_midi))  # keep in audible bass range
+            bass_midi = max(24, min(60, bass_midi))
             kwargs = bass_track.render_kwargs(bar)
-            bass_l, bass_r = bass_track.instrument.render(bass_midi, spb, **kwargs)
+            # Per-step rendering: fire a fresh acidenv at each onset position.
+            # Each note renders for 2 sixteenth-note durations (the acidenv
+            # decays within ~80-150ms; 2×4725=9450 samples ≈ 214ms).
+            bass_l_bar = np.zeros(spb, dtype=np.float32)
+            bass_r_bar = np.zeros(spb, dtype=np.float32)
+            step_dur = sp16 * 2
+            for step in bass_steps:
+                onset = step * sp16
+                if onset >= spb:
+                    continue
+                n_step = min(step_dur, spb - onset)
+                bl, br = bass_track.instrument.render(bass_midi, n_step, gain=1.0, **kwargs)
+                bass_l_bar[onset:onset + n_step] += bl
+                bass_r_bar[onset:onset + n_step] += br
+            bass_l_bar *= GAIN_BASS
+            bass_r_bar *= GAIN_BASS
             if kick_buf_l is not None:
-                bass_l, bass_r = self._sidechain.process(bass_l, bass_r, kick_buf_l)
-            mix_l += bass_l
-            mix_r += bass_r
+                bass_l_bar, bass_r_bar = self._sidechain.process(
+                    bass_l_bar, bass_r_bar, kick_buf_l)
+            mix_l += bass_l_bar
+            mix_r += bass_r_bar
 
         # ── Lead ─────────────────────────────────────────────────────────────
         lead_track = self._get_track('lead')

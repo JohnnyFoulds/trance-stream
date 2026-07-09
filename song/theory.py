@@ -85,6 +85,15 @@ PAD_VOICING_OFFSETS = [0, -14, -21]
 # Source: docs/music_theory/04_generative_melody.md §2
 SA_NOTEARP_PATTERN = [-1, -1, -1, -1, 0, -1, -1, -1, 0, 1, 1, 0, 1, 0, 1, 0]
 
+# SA's bstruct bass pattern: <row_a row_b>*16 — two alternating 16-step rows.
+# Decoded from bstruct mini-notation: 1=onset, 0=continuation/rest.
+# Row A (11 onsets, syncopated): every 16th with some held notes
+# Row B (dense, ~every step): busier version
+# We encode as active 16th positions (0-indexed) per row.
+# Source: docs/music_theory/02_sa_vocabulary_codified.md §7 (bstruct analysis)
+BASS_STEPS_A = [0, 1, 2, 4, 5, 7, 8, 9, 11, 13, 14]   # 11 onsets — sparse row
+BASS_STEPS_B = [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]  # 14 onsets — dense row
+
 # ---------------------------------------------------------------------------
 # DRUM PATTERNS
 # ---------------------------------------------------------------------------
