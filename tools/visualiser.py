@@ -32,17 +32,23 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # ANSI colour/style codes
 # ---------------------------------------------------------------------------
-_RESET  = '\033[0m'
-_BOLD   = '\033[1m'
-_DIM    = '\033[2m'
-_GREEN  = '\033[92m'   # active track dot
-_CYAN   = '\033[96m'   # filter bar filled / CA row at low energy
-_YELLOW = '\033[93m'   # CA row at high energy
-_WHITE  = '\033[97m'
+_RESET   = '\033[0m'
+_BOLD    = '\033[1m'
+_DIM     = '\033[2m'
+_GREEN   = '\033[92m'   # active track dot
+_CYAN    = '\033[96m'   # filter bar / UI accents
+_YELLOW  = '\033[93m'
+_MAGENTA = '\033[95m'
+_WHITE   = '\033[97m'
 _HIDE_CURSOR = '\033[?25l'
 _SHOW_CURSOR = '\033[?25h'
 _HOME        = '\033[H'
 _CLEAR       = '\033[2J'
+
+# CA chord palette — one colour per chord index (0-3).
+# Chosen to be distinct but not garish; all readable on dark backgrounds.
+# Chord 0 (tonic) = cyan (home, stable), 1 = green (lift), 2 = yellow (tension), 3 = magenta (release).
+_CA_PALETTE = ['\033[96m', '\033[92m', '\033[93m', '\033[95m']
 
 # Box-drawing
 _TL = '╔'
@@ -260,8 +266,8 @@ class Visualiser:
         # Advance CA one step
         self._ca = _ca_next(self._ca)
 
-        # Record this row in history (copy + current energy colour tag)
-        self._ca_history.append((self._ca.copy(), info.filter_slider))
+        # Record this row in history: (ca_row, filter_slider, chord_idx)
+        self._ca_history.append((self._ca.copy(), info.filter_slider, info.chord_idx))
 
         # Compute how many CA history lines fit given the fixed UI chrome.
         fixed = _FIXED_LINES_WIDE if wide else _FIXED_LINES_NARROW
@@ -363,23 +369,39 @@ class Visualiser:
             gate_row = f'Gate   {_DIM}{gate_str}{_RESET}'
 
         # ── CA spacetime diagram ──────────────────────────────────────
-        # One terminal character per CA cell — uses the full inner width.
-        # "Rule 30" is overlaid on the rightmost chars of the newest row
-        # rather than appended, so cells go edge-to-edge.
-        ca_inner  = inner   # full inner width; same 1-char left margin as other rows
+        # Colour scheme: hue = chord index (4-colour palette), brightness
+        # = filter arc tier (dim/normal/bold). This encodes both harmonic
+        # state and session energy in the visual texture.
+        #
+        # "Rule 30" sits in the right-margin padding of the newest row —
+        # written as dim reversed text so it reads as ambient metadata
+        # without displacing any CA cells.
+        ca_inner = inner   # cells fill the full inner width
 
-        label_txt   = 'Rule 30'   # 7 chars
-        label_start = ca_inner - len(label_txt)
+        # Label lives in the padding zone between content and right ║.
+        # row() pads content to inner width — we write label into that
+        # padding by appending it after the cell string and measuring.
+        label_txt = 'Rule 30'
 
         history_slice = list(self._ca_history)[-ca_lines:]
+        pad_count     = ca_lines - len(history_slice)
         blank_row_str = f'{_DIM}{"░" * ca_inner}{_RESET}'
-        pad_count = ca_lines - len(history_slice)
 
         ca_rendered = []
-        for i, (ca_row, fslider) in enumerate(history_slice):
-            age      = len(history_slice) - i   # 1 = newest
-            ca_color = _YELLOW if fslider > 0.6 else _CYAN
-            prefix   = '' if age == 1 else _DIM
+        for i, entry in enumerate(history_slice):
+            ca_row, fslider, chord_idx = entry
+            age = len(history_slice) - i   # 1 = newest
+
+            # Hue: chord palette
+            ca_color = _CA_PALETTE[chord_idx % len(_CA_PALETTE)]
+
+            # Brightness: dim early session, normal mid, bold when open
+            if fslider < 0.5:
+                bright = _DIM
+            elif fslider > 0.7:
+                bright = _BOLD
+            else:
+                bright = ''
 
             # Build cell string — 1 char per cell, fit to ca_inner
             raw = ''.join('█' if c else '░' for c in ca_row)
@@ -388,13 +410,20 @@ class Visualiser:
             else:
                 raw = raw[:ca_inner]
 
+            content = f'{bright}{ca_color}{raw}{_RESET}'
+
             if age == 1:
-                # Overlay label on rightmost chars of the newest row
-                content = (f'{ca_color}{raw[:label_start]}{_RESET}'
-                           f'{_DIM}{label_txt}{_RESET}')
+                # Newest row: trim rightmost cells to make room for the
+                # label. Label is dim — reads as ambient metadata, not
+                # competing with the CA pattern.
+                # Layout: ║(1) + sp(2) + cells(ca_inner - 7) + label(7) + ║(1) = cols
+                cells_w = ca_inner - len(label_txt)
+                ca_rendered.append(
+                    f'{_V}  {bright}{ca_color}{raw[:cells_w]}{_RESET}'
+                    f'{_DIM}{label_txt}{_RESET}{_V}'
+                )
             else:
-                content = f'{prefix}{ca_color}{raw}{_RESET}'
-            ca_rendered.append(row(content))
+                ca_rendered.append(row(content))
 
         # ── Assemble ──────────────────────────────────────────────────
         bottom = f'{_BL}{_H * (cols - 2)}{_BR}'
