@@ -83,27 +83,39 @@ def notearp_pattern(chord_midi_notes: list[int]) -> StepPattern:
 
 
 def lead_melody_pattern(chord_midi_notes: list[int], bar: int) -> StepPattern:
-    """SA's lead melody pattern — sparse 2-note phrase with bar-cycling notes.
+    """SA-inspired lead melody with 4-bar phrase cycle and 8-bar rhythm variation.
 
-    Derived from SA's "@@2 <-7 [-5 -2]>@3 <0 -3 2 1>@3".add 7:
-    - @@2 (weight 2): rest for first 4 sixteenth-notes (steps 0–3)
-    - <...>@3 (weight 3): note at step 4, sustained 6 sixteenth-notes
-    - <...>@3 (weight 3): note at step 10, sustained 6 sixteenth-notes
+    chord_midi_notes is a 5-tone vocabulary built from the chord root + 4 scale
+    steps above it, giving real melodic movement beyond root/fifth monotony.
 
-    Step 4 note alternates each bar (< > cycling):
-      even bars: chord[0]
-      odd bars:  chord[1 % n]  — the fifth, or same note if monophonic
+    Rhythm: the step positions shift on an 8-bar cycle to avoid feeling static.
+      bars 0,4:  [4, 10]   — SA's canonical back-loaded spacing (weight 2+3+3)
+      bars 1,5:  [2, 10]   — pushed early, creates anticipation
+      bars 2,6:  [4, 12]   — shifted late, "call and answer" across the beat
+      bars 3,7:  [6, 11]   — syncopated, cross-rhythm tension
 
-    Step 10 note cycles every 4 bars (<0 -3 2 1> mapped to available chord tones):
-      bar%4==0: chord[0]
-      bar%4==1: chord[1 % n]
-      bar%4==2: chord[0]  — back to root for a question-answer phrase shape
-      bar%4==3: chord[1 % n]
+    Note choices follow a 4-bar descending phrase through 4 scale tones:
+      position A (first hit): bar%4=0→tone[0], 1→tone[4], 2→tone[2], 3→tone[3]
+      position B (second hit): bar%4=0→tone[2], 1→tone[0], 2→tone[3], 3→tone[1]
 
-    All notes should already be transposed +12 by the caller (SA's .add 7).
-    Source: docs/music_theory/02_sa_vocabulary_codified.md §3 (lead melody analysis)
+    The combined effect: a minor-key melodic line that resolves every 4 bars
+    and shifts rhythmic feel every 2 bars — exactly SA's live energy.
     """
     n = max(len(chord_midi_notes), 1)
-    note_4  = chord_midi_notes[bar % 2 % n]
-    note_10 = chord_midi_notes[(bar % 4 // 2) % n]   # 0→0, 1→0, 2→1, 3→1 in 2-tone chord
-    return StepPattern(steps=[4, 10], notes=[note_4, note_10])
+
+    # 8-bar rhythm cycle
+    _RHYTHM = [(4, 10), (2, 10), (4, 12), (6, 11),
+               (4, 10), (2, 10), (4, 12), (6, 11)]
+    step_a, step_b = _RHYTHM[bar % 8]
+
+    # 4-bar note phrase for each hit position
+    _PHRASE_A = [0, 4, 2, 3]   # first hit: root → top → 3rd → 4th
+    _PHRASE_B = [2, 0, 3, 1]   # second hit: 3rd → root → 4th → 2nd
+
+    idx_a = _PHRASE_A[bar % 4] % n
+    idx_b = _PHRASE_B[bar % 4] % n
+
+    note_a = chord_midi_notes[idx_a]
+    note_b = chord_midi_notes[idx_b]
+
+    return StepPattern(steps=[step_a, step_b], notes=[note_a, note_b])

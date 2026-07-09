@@ -55,13 +55,15 @@ python trance_stream_v3.py [OPTIONS]
                         and a Rule-30 cellular automaton spacetime diagram.
                         Only valid with --stream.
 
-      --ascii-video PATH  Load a pre-rendered ASCII video frame file and use it
-                        as a colour overlay on the CA diagram. The CA continues
-                        running; the video colours each cell. Press v to toggle
-                        the overlay on/off while streaming.
-                        If PATH is omitted the default asset is used when present
-                        (tools/bad_apple_frames.txt — see below).
-                        Only active with --stream --viz.
+      --ascii-video [PATH ...]
+                        Load one or more pre-rendered ASCII video frame files and
+                        use them as a colour overlay on the CA diagram. The CA
+                        continues running; the video colours each cell. Press v
+                        to cycle through the loaded videos and back to normal CA
+                        colour mode.
+                        If omitted, all tools/*_frames.txt files are
+                        auto-discovered (Bad Apple + Star Wars when both are
+                        present). Only active with --stream --viz.
 
       --wav PATH        Write output to a WAV file (default when not streaming:
                         /tmp/trance_v3.wav)
@@ -211,31 +213,47 @@ python trance_stream_v3.py --stream --viz --seed dawn --mood uplifting
 
 ### ASCII video overlay
 
-The CA diagram has a second display mode where a pre-rendered ASCII video file
-is used as a colour overlay. The CA keeps scrolling and driving the music;
+The CA diagram has a second display mode where pre-rendered ASCII video files
+are used as a colour overlay. The CA keeps scrolling and driving the music;
 the video frame at each moment determines the colour of each cell.
 
+Two built-in assets are available — download them once:
+
 ```bash
-# Download the Bad Apple frame file (one-off, ~13 MB)
+# Bad Apple (6,572 frames, 30 fps, 60×32)
 python tools/fetch_bad_apple.py
 
-# Stream with overlay active from the start
-python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt
+# Star Wars asciimation (15,973 frames, 15 fps, 67×13)
+python tools/fetch_starwars.py
+```
 
-# Or just run --viz — the overlay loads automatically if the default file is present
+Once the frame files are in `tools/`, run `--viz` and they are auto-discovered:
+
+```bash
 python trance_stream_v3.py --stream --viz
 ```
 
-Press **`v`** while streaming to toggle the overlay on and off.
+Press **`v`** while streaming to cycle through the videos:
+`[normal CA colours]` → `[Bad Apple]` → `[Star Wars]` → `[normal CA colours]` → …
+
+Load specific files or a custom set:
+
+```bash
+# One file only
+python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt
+
+# Explicit playlist
+python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt tools/starwars_15fps_frames.txt
+```
 
 The overlay uses cover scaling: the video always fills the entire CA area with
 no letterbox bars. The video is center-cropped to fit the terminal shape.
-Playback is wall-clock synced at the video's native frame rate (30 fps for
-Bad Apple), advancing smoothly on every sixteenth-note tick regardless of BPM.
+Playback is wall-clock synced at the video's native frame rate, advancing
+smoothly on every sixteenth-note tick regardless of BPM.
 
 Any conforming frame file works — the format is one frame per line with rows
 separated by literal `\n` (the backslashxx/bad-apple-ascii format). The frame
-rate is parsed from the filename pattern `*_30fps_*`; defaults to 30 if absent.
+rate is parsed from the filename pattern `*_Nfps_*`; defaults to 30 if absent.
 
 Renders a full-screen text display that updates once per bar. Layout
 adapts to terminal width: wide (≥ 100 cols) shows full labels and timing

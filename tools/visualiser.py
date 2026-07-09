@@ -216,12 +216,8 @@ class Visualiser:
     stop() on exit to restore the terminal.
     """
 
-    # Default path checked automatically when no --ascii-video is given.
-    DEFAULT_ASCII_VIDEO = os.path.join(os.path.dirname(__file__), 'bad_apple_frames.txt')
-
     def __init__(self, song, n_bars: Optional[int] = None,
-                 ascii_video_frames=None, ascii_video_fps: int = 30,
-                 ascii_video_width: int = 60, ascii_video_height: int = 32):
+                 ascii_video_playlist=None):
         self.song   = song
         self.n_bars = n_bars
         # CA width adapts to terminal width — initialised on first update().
@@ -235,18 +231,28 @@ class Visualiser:
         self._ca_history: deque = deque(maxlen=200)
         self._last_info: Optional[BarInfo] = None
 
-        # ASCII video overlay state
-        self._ascii_video_frames = ascii_video_frames
-        self._ascii_video_fps    = ascii_video_fps
-        self._ascii_video_width  = ascii_video_width
-        self._ascii_video_height = ascii_video_height
-        self._ascii_video_mode   = False
-        self._ascii_video_frame_idx = 0
+        # ASCII video playlist state
+        # _av_playlist: list of (frames, fps, w, h) tuples
+        # _av_playlist_idx: -1 = normal CA mode; 0..N-1 = active video index
+        self._av_playlist: list = list(ascii_video_playlist or [])
+        self._av_playlist_idx: int = -1
+        self._ascii_video_frame_idx: int = 0
         self._ascii_video_start_time: Optional[float] = None
 
         # stdin state for keybind (set up in start())
         self._stdin_fd: Optional[int] = None
         self._old_termios = None
+
+    @property
+    def _ascii_video_mode(self) -> bool:
+        return self._av_playlist_idx >= 0
+
+    @property
+    def _current_av(self):
+        """Return (frames, fps, w, h) for the active video, or None."""
+        if self._av_playlist_idx < 0 or not self._av_playlist:
+            return None
+        return self._av_playlist[self._av_playlist_idx]
 
     def start(self) -> None:
         # Enter cbreak mode so keypresses are available without Enter.
@@ -263,18 +269,20 @@ class Visualiser:
         except Exception:
             self._stdin_fd = None
 
-        # Auto-load default video if none was provided explicitly
-        if self._ascii_video_frames is None and os.path.exists(self.DEFAULT_ASCII_VIDEO):
-            try:
-                sys.path.insert(0, os.path.dirname(__file__))
-                from ascii_video import load_frames
-                frames, fps, w, h = load_frames(self.DEFAULT_ASCII_VIDEO)
-                self._ascii_video_frames = frames
-                self._ascii_video_fps    = fps
-                self._ascii_video_width  = w
-                self._ascii_video_height = h
-            except Exception:
-                pass
+        # Auto-discover all *_frames.txt in the tools directory when no
+        # explicit playlist was provided via the constructor.
+        if not self._av_playlist:
+            import glob
+            tools_dir = os.path.dirname(os.path.abspath(__file__))
+            sys.path.insert(0, tools_dir)
+            from ascii_video import load_frames
+            for path in sorted(glob.glob(os.path.join(tools_dir, '*_frames.txt'))):
+                try:
+                    frames, fps, w, h = load_frames(path)
+                    if frames:
+                        self._av_playlist.append((frames, fps, w, h))
+                except Exception:
+                    pass
 
         sys.stdout.write(_HIDE_CURSOR + _CLEAR + _HOME)
         sys.stdout.flush()
@@ -306,14 +314,16 @@ class Visualiser:
 
         self._poll_keys()
 
-        if self._ascii_video_mode and self._ascii_video_frames:
+        av = self._current_av
+        if av is not None:
+            av_frames, av_fps, _av_w, _av_h = av
             # Advance frame index by wall clock then do a full redraw
             now = time.monotonic()
             if self._ascii_video_start_time is None:
                 self._ascii_video_start_time = now
             elapsed = now - self._ascii_video_start_time
             self._ascii_video_frame_idx = (
-                round(elapsed * self._ascii_video_fps) % len(self._ascii_video_frames)
+                round(elapsed * av_fps) % len(av_frames)
             )
             cols, rows = shutil.get_terminal_size((80, 24))
             wide = cols >= 100
@@ -374,11 +384,15 @@ class Visualiser:
             return
         if select.select([sys.stdin], [], [], 0)[0]:
             chunk = os.read(self._stdin_fd, 256)
-            if b'v' in chunk:
-                if self._ascii_video_frames is not None:
-                    self._ascii_video_mode = not self._ascii_video_mode
-                    if self._ascii_video_mode:
-                        self._ascii_video_start_time = time.monotonic()
+            if b'v' in chunk and self._av_playlist:
+                # Cycle: 0 → 1 → ... → N-1 → -1 (normal CA) → 0 → ...
+                if self._av_playlist_idx < len(self._av_playlist) - 1:
+                    self._av_playlist_idx += 1
+                else:
+                    self._av_playlist_idx = -1
+                if self._av_playlist_idx >= 0:
+                    self._ascii_video_start_time = time.monotonic()
+                    self._ascii_video_frame_idx = 0
 
     def update(self, info: BarInfo) -> None:
         """Advance CA, record history, re-render the full display in place."""
@@ -568,11 +582,12 @@ class Visualiser:
         av_frame = None
         av_row_src_start = av_col_src_start = 0.0
         av_scaled_w = av_scaled_h = 1
-        if self._ascii_video_mode and self._ascii_video_frames:
-            av_frame = self._ascii_video_frames[self._ascii_video_frame_idx]
-
-            av_w = self._ascii_video_width
-            av_h = self._ascii_video_height
+        av_w = av_h = 1   # overridden below when a video is active
+        _cur_av = self._current_av
+        if _cur_av is not None:
+            _av_frames, _av_fps, av_w, av_h = _cur_av
+            frame_idx = self._ascii_video_frame_idx % len(_av_frames)
+            av_frame = _av_frames[frame_idx]
 
             # Cover mode: always fill the entire CA area, center-crop excess.
             # No bars ever — every cell gets a video color. This is correct for
@@ -591,14 +606,14 @@ class Visualiser:
         def _av_colored_row(raw: str, display_row: int) -> str:
             """Color every cell in a CA row using the current video frame."""
             src_r = display_row + av_row_src_start
-            src_row_idx = min(int(src_r / av_scaled_h * self._ascii_video_height),
-                              self._ascii_video_height - 1)
+            src_row_idx = min(int(src_r / av_scaled_h * av_h),
+                              av_h - 1)
             src_line = av_frame[src_row_idx] if src_row_idx < len(av_frame) else ''
             chars = []
             for col_idx, ch in enumerate(raw):
                 src_c = col_idx + av_col_src_start
-                src_col_idx = min(int(src_c / av_scaled_w * self._ascii_video_width),
-                                  self._ascii_video_width - 1)
+                src_col_idx = min(int(src_c / av_scaled_w * av_w),
+                                  av_w - 1)
                 src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
                 chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
             return ''.join(chars)

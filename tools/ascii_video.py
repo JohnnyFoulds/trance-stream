@@ -41,10 +41,23 @@ def load_frames(path: str) -> tuple[list[list[str]], int, int, int]:
     if not frames:
         return [], fps, 60, 32
 
-    height = len(frames[0])
-    width = max((len(row) for row in frames[0]), default=60)
+    # Use the most common row count as the canonical height (handles frames
+    # with all-blank rows that look shorter if stripped).
+    from collections import Counter
+    height_counts = Counter(len(f) for f in frames)
+    height = height_counts.most_common(1)[0][0]
+
+    # Width = widest row across any frame
+    width = max((len(row) for frame in frames for row in frame), default=60)
+    if width == 0:
+        width = 60
 
     for frame in frames:
+        # Pad short frames to canonical height with blank rows
+        while len(frame) < height:
+            frame.append('')
+        # Trim frames taller than canonical height
+        del frame[height:]
         for i in range(len(frame)):
             row = frame[i]
             d = width - len(row)
@@ -64,9 +77,10 @@ def _load_oneline_format(raw: bytes) -> list[list[str]]:
         if not line:
             continue
         rows = line.split('\\n')
-        rows = [r for r in rows if r]  # drop empty first/last
-        if rows:
-            frames.append(rows)
+        # Keep all rows (including interior blanks) — only skip if the entire
+        # line was empty (already guarded above). Append even if all rows are
+        # blank so every encoded frame is represented in the playlist.
+        frames.append(rows)
     return frames
 
 

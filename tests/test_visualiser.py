@@ -156,13 +156,10 @@ class TestTickOverlayPassesHitMap:
         """Run tick() capturing stdout, return stripped full output."""
         import io
         import unittest.mock as mock
-        self.viz._ascii_video_mode = overlay
-        if overlay:
-            self.viz._ascii_video_frames = [[' ' * 60] * 32]
-            self.viz._ascii_video_fps = 30
-            self.viz._ascii_video_width = 60
-            self.viz._ascii_video_height = 32
-            self.viz._ascii_video_start_time = None
+        dummy_playlist = [([[' ' * 60] * 32], 30, 60, 32)]
+        self.viz._av_playlist = dummy_playlist
+        self.viz._av_playlist_idx = 0 if overlay else -1
+        self.viz._ascii_video_start_time = None
         self.viz._stdin_fd = None
 
         buf = io.StringIO()
@@ -238,3 +235,91 @@ class TestNarrowLayout:
         hit_map = {t: False for t in ALL_TRACKS}
         line = self._narrow_tracks_line(hit_map)
         assert 'P●' in line, f'narrow: P (pad) should show ● when droning, got: {line}'
+
+
+# ---------------------------------------------------------------------------
+# Playlist cycling
+# ---------------------------------------------------------------------------
+
+def _dummy_video(n: int = 1) -> tuple:
+    """Return a minimal (frames, fps, w, h) tuple for testing."""
+    return ([[' ' * 10] * 5] * n, 15, 10, 5)
+
+
+class TestPlaylistCycling:
+    """v-key cycles through playlist entries then back to normal CA mode."""
+
+    def setup_method(self):
+        self.viz, _ = _make_viz()
+        self.viz._stdin_fd = None
+
+    def _press_v(self):
+        """Simulate a single 'v' keypress."""
+        self.viz._av_playlist  # ensure property exists
+        if self.viz._av_playlist:
+            if self.viz._av_playlist_idx < len(self.viz._av_playlist) - 1:
+                self.viz._av_playlist_idx += 1
+            else:
+                self.viz._av_playlist_idx = -1
+            if self.viz._av_playlist_idx >= 0:
+                self.viz._ascii_video_start_time = 0.0
+                self.viz._ascii_video_frame_idx = 0
+
+    def test_empty_playlist_stays_normal(self):
+        self.viz._av_playlist = []
+        self.viz._av_playlist_idx = -1
+        self._press_v()
+        assert self.viz._av_playlist_idx == -1
+        assert not self.viz._ascii_video_mode
+
+    def test_single_video_cycle(self):
+        self.viz._av_playlist = [_dummy_video()]
+        self.viz._av_playlist_idx = -1
+        # -1 → 0
+        self._press_v()
+        assert self.viz._av_playlist_idx == 0
+        assert self.viz._ascii_video_mode
+        # 0 → -1
+        self._press_v()
+        assert self.viz._av_playlist_idx == -1
+        assert not self.viz._ascii_video_mode
+
+    def test_two_video_full_cycle(self):
+        self.viz._av_playlist = [_dummy_video(), _dummy_video()]
+        self.viz._av_playlist_idx = -1
+        self._press_v()
+        assert self.viz._av_playlist_idx == 0   # first video
+        self._press_v()
+        assert self.viz._av_playlist_idx == 1   # second video
+        self._press_v()
+        assert self.viz._av_playlist_idx == -1  # normal CA
+        self._press_v()
+        assert self.viz._av_playlist_idx == 0   # wraps back to first
+
+    def test_start_time_reset_on_activation(self):
+        self.viz._av_playlist = [_dummy_video()]
+        self.viz._av_playlist_idx = -1
+        self.viz._ascii_video_start_time = None
+        self._press_v()
+        assert self.viz._av_playlist_idx == 0
+        assert self.viz._ascii_video_start_time is not None
+
+    def test_start_time_unchanged_on_deactivation(self):
+        self.viz._av_playlist = [_dummy_video()]
+        self.viz._av_playlist_idx = 0
+        self.viz._ascii_video_start_time = 42.0
+        self._press_v()
+        assert self.viz._av_playlist_idx == -1
+        # start_time should not be reset when going back to CA mode
+        assert self.viz._ascii_video_start_time == 42.0
+
+    def test_current_av_returns_none_in_normal_mode(self):
+        self.viz._av_playlist = [_dummy_video()]
+        self.viz._av_playlist_idx = -1
+        assert self.viz._current_av is None
+
+    def test_current_av_returns_tuple_when_active(self):
+        vid = _dummy_video()
+        self.viz._av_playlist = [vid]
+        self.viz._av_playlist_idx = 0
+        assert self.viz._current_av is vid
