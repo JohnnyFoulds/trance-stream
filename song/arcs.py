@@ -99,6 +99,42 @@ def gain_arc(bar: int, base_gain: float,
     return base_gain * t
 
 
+def breakdown_at(bar: int, song: 'Song') -> bool:
+    """Return True if this bar is inside the pre-pullback breakdown window.
+
+    The breakdown strips all voices except kick and pad for 4 bars immediately
+    before the filter pullback. This creates a tension moment before the
+    filter dips to 311 Hz, making the subsequent reopening feel like a release.
+    """
+    pb = song.filter_pb_bar
+    return pb - 4 <= bar < pb
+
+
+def gain_arc(bar: int, song: 'Song') -> float:
+    """Master gain multiplier that builds over the session (0.55 → 1.0).
+
+    Rises from 0.55 at bar 0 to 1.0 by bar 64 (the pullback), then stays
+    at 1.0. Creates a gradual sense of the mix getting bigger over time
+    without sounding like a volume knob being turned.
+    """
+    ramp_end = song.filter_pb_bar
+    if bar >= ramp_end:
+        return 1.0
+    return 0.55 + 0.45 * (bar / max(ramp_end, 1))
+
+
+def pad_seg_count(bar: int, song: 'Song') -> int:
+    """Number of times the pad filter envelope retriggers within a bar.
+
+    SA's .seg 16 on the pad (added at pad_chord_on) retriggers the lpenv
+    16 times per bar, turning a smooth drone into rhythmic filter stabs.
+    Before that stage: 1 (single sustained swell per bar).
+    """
+    if bar >= song.stage_bars.get('pad_chord_on', 9999):
+        return 16
+    return 1
+
+
 def chord_state_at(bar: int, song: 'Song') -> tuple:
     """Return (chord_prog, chord_weights, effective_root_midi) for a given bar.
 

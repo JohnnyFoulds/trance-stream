@@ -88,6 +88,10 @@ class SongRenderer:
         song = self.song
         sb   = song.stage_bars
 
+        from song.arcs import breakdown_at, gain_arc as _gain_arc, pad_seg_count
+        in_breakdown = breakdown_at(bar, song)
+        master_gain  = _gain_arc(bar, song)
+
         mix_l = np.zeros(spb, dtype=np.float32)
         mix_r = np.zeros(spb, dtype=np.float32)
 
@@ -154,7 +158,7 @@ class SongRenderer:
 
         # ── Hi-hat ───────────────────────────────────────────────────────────
         _hihat_allowed = self._active_tracks is None or 'hihat' in self._active_tracks
-        if _hihat_allowed and bar >= sb.get('hihat_on', 9999):
+        if _hihat_allowed and not in_breakdown and bar >= sb.get('hihat_on', 9999):
             kick_track2 = self._get_track('kick')
             if kick_track2:
                 from song.arcs import hihat_decay_arc
@@ -177,7 +181,7 @@ class SongRenderer:
 
         # ── Clap ─────────────────────────────────────────────────────────────
         _clap_allowed = self._active_tracks is None or 'clap' in self._active_tracks
-        if _clap_allowed and bar >= sb.get('clap_on', 9999):
+        if _clap_allowed and not in_breakdown and bar >= sb.get('clap_on', 9999):
             kick_track3 = self._get_track('kick')
             if kick_track3:
                 cl_l, cl_r = kick_track3.instrument.render_clap(gain=GAIN_CLAP)
@@ -199,9 +203,29 @@ class SongRenderer:
             else:
                 notes = [song.root_midi + 12]
             kwargs = pad_track.render_kwargs(bar)
-            pad_l, pad_r = pad_track.instrument.render(
-                notes, spb, gain=GAIN_PAD, chord_id=chord_idx,
-                global_offset_samples=bar * spb, **kwargs)
+            n_segs = pad_seg_count(bar, song)
+            if n_segs == 1:
+                pad_l, pad_r = pad_track.instrument.render(
+                    notes, spb, gain=GAIN_PAD, chord_id=chord_idx,
+                    global_offset_samples=bar * spb, **kwargs)
+            else:
+                # Retrigger lpenv n_segs times per bar — SA's .seg 16 equivalent.
+                # Each segment gets a fresh lpenv swell, turning the drone into
+                # rhythmic filter stabs that pulse with the kick grid.
+                seg_len = spb // n_segs
+                pad_l = np.zeros(spb, dtype=np.float32)
+                pad_r = np.zeros(spb, dtype=np.float32)
+                for seg in range(n_segs):
+                    onset = seg * seg_len
+                    n = seg_len if seg < n_segs - 1 else spb - onset
+                    # Force chord_id change each segment to retrigger lpenv swell
+                    fake_chord_id = chord_idx * 1000 + seg
+                    sl, sr_ = pad_track.instrument.render(
+                        notes, n, gain=GAIN_PAD,
+                        chord_id=fake_chord_id,
+                        global_offset_samples=bar * spb + onset, **kwargs)
+                    pad_l[onset:onset + n] += sl
+                    pad_r[onset:onset + n] += sr_
             # Sidechain: duck pad on kick
             if kick_buf_l is not None:
                 pad_l, pad_r = self._sidechain.process(pad_l, pad_r, kick_buf_l)
@@ -210,7 +234,7 @@ class SongRenderer:
 
         # ── Bass ─────────────────────────────────────────────────────────────
         bass_track = self._get_track('bass')
-        if bass_track and bass_track.is_active(bar):
+        if bass_track and bass_track.is_active(bar) and not in_breakdown:
             from song.theory import BASS_STEPS_A, BASS_STEPS_B, GAIN_BASS
             # CA density above 0.55 → denser step pattern (more hits per bar).
             # Below that threshold alternate A/B as before.
@@ -246,7 +270,7 @@ class SongRenderer:
 
         # ── Lead ─────────────────────────────────────────────────────────────
         lead_track = self._get_track('lead')
-        if lead_track and lead_track.is_active(bar):
+        if lead_track and lead_track.is_active(bar) and not in_breakdown:
             from song.pattern import lead_melody_pattern
             kwargs = lead_track.render_kwargs(bar)
 
@@ -301,6 +325,10 @@ class SongRenderer:
                 lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
             mix_l += lead_l
             mix_r += lead_r
+
+        # Master gain arc: 0.55 → 1.0 over the first half of the song
+        mix_l *= master_gain
+        mix_r *= master_gain
 
         # Soft clip to prevent digital overs
         mix_l = np.tanh(mix_l)
