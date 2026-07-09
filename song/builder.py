@@ -26,32 +26,35 @@ _NOTEARP_PATTERNS = [
 ]
 
 # Chord progression pool per mood — multiple options so seed varies the harmony.
+# Each chord entry is [root_degree, fifth_degree] so notearp index 0=root, 1=fifth.
+# Two distinct tones are required; with only one the notearp plays the same note
+# every step — a buzzing flutter instead of melody.
 # Source: docs/music_theory/01_trance_harmony.md §2
 _PROGRESSIONS_BY_MOOD = {
     'uplifting':   [
-        [[0], [5], [2], [4]],   # i – VI – III – v  (euphoric)
-        [[0], [3], [5], [4]],   # i – iv – VI – v
-        [[0], [6], [3], [5]],   # i – VII – iv – VI
+        [[0, 4], [5, 2], [2, 6], [4, 1]],   # i – VI – III – v
+        [[0, 4], [3, 0], [5, 2], [4, 1]],   # i – iv – VI – v
+        [[0, 4], [6, 3], [3, 0], [5, 2]],   # i – VII – iv – VI
     ],
     'dark':        [
-        [[0], [3], [0], [6]],   # i – iv – i – VII  (tension loop)
-        [[0], [6], [5], [3]],   # i – VII – VI – iv
-        [[0], [5], [3], [6]],   # i – VI – iv – VII
+        [[0, 4], [3, 0], [0, 4], [6, 3]],   # i – iv – i – VII
+        [[0, 4], [6, 3], [5, 2], [3, 0]],   # i – VII – VI – iv
+        [[0, 4], [5, 2], [3, 0], [6, 3]],   # i – VI – iv – VII
     ],
     'acid':        [
-        [[0], [2], [3], [2]],   # i – III – iv – III (hypnotic)
-        [[0], [3], [2], [0]],   # i – iv – III – i
-        [[0], [2], [5], [3]],   # i – III – VI – iv
+        [[0, 4], [2, 6], [3, 0], [2, 6]],   # i – III – iv – III
+        [[0, 4], [3, 0], [2, 6], [0, 4]],   # i – iv – III – i
+        [[0, 4], [2, 6], [5, 2], [3, 0]],   # i – III – VI – iv
     ],
     'dreamy':      [
-        [[3], [4], [5], [6]],   # SA canonical in dorian
-        [[0], [4], [5], [2]],   # I – V – VI – III
-        [[0], [5], [3], [4]],   # I – VI – IV – V
+        [[3, 0], [4, 1], [5, 2], [6, 3]],   # SA canonical
+        [[0, 4], [4, 1], [5, 2], [2, 6]],   # I – V – VI – III
+        [[0, 4], [5, 2], [3, 0], [4, 1]],   # I – VI – IV – V
     ],
     'progressive': [
-        [[0], [3], [4], [1]],   # I – IV – V – ii
-        [[0], [4], [5], [3]],   # I – V – VI – IV
-        [[0], [1], [5], [4]],   # I – ii – VI – V
+        [[0, 4], [3, 0], [4, 1], [1, 5]],   # I – IV – V – ii
+        [[0, 4], [4, 1], [5, 2], [3, 0]],   # I – V – VI – IV
+        [[0, 4], [1, 5], [5, 2], [4, 1]],   # I – ii – VI – V
     ],
 }
 

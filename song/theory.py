@@ -53,13 +53,16 @@ FM_ARC_TARGET    = 0.55
 
 # Source: docs/music_theory/01_trance_harmony.md §2, docs/music_theory/02_sa_vocabulary_codified.md §1
 PROGRESSIONS = {
-    'uplifting':    [[0], [5], [2], [4]],
-    'dark':         [[0], [3], [0], [6]],
-    'acid':         [[0], [2], [3], [2]],
-    'progressive':  [[0], [3], [4], [1]],
-    'sa_canonical': [[3], [4], [5], [6]],
-    # degrees 3→4→5→6 in G minor = C→D→Eb→F
-    # asymmetric timing in SA's pattern: C@3 D@1 Eb@3 F@1 (degrees 3 and 5 held 3×)
+    # Each entry is [root_degree, fifth_degree] so notearp index 0=root, 1=fifth.
+    # The fifth is always +4 scale steps above the root (natural minor fifths).
+    # Without two distinct tones the notearp arpeggiates the same note repeatedly,
+    # producing a buzzing flutter instead of melody.
+    'uplifting':    [[0, 4], [5, 2], [2, 6], [4, 1]],
+    'dark':         [[0, 4], [3, 0], [0, 4], [6, 3]],
+    'acid':         [[0, 4], [2, 6], [3, 0], [2, 6]],
+    'progressive':  [[0, 4], [3, 0], [4, 1], [1, 5]],
+    'sa_canonical': [[3, 0], [4, 1], [5, 2], [6, 3]],
+    # SA's degrees 3→4→5→6 in G minor = C→D→Eb→F, each paired with their fifth
 }
 
 PAD_CHORD_WEIGHTS = [3, 1, 3, 1]  # relative durations of sa_canonical degrees
