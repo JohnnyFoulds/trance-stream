@@ -55,6 +55,28 @@ class SongRenderer:
         # Keys: 'density' (float 0–1), 'voicing_offset' (int semitones).
         self.ca_state: dict = {}
 
+    def fast_forward(self, n_bars: int) -> None:
+        """Advance song state by n_bars without synthesising audio.
+
+        Only advances counters, filter state, and chord tracking — skips
+        the expensive oscillator and reverb rendering. The first real bar
+        after fast_forward() may have a very slight oscillator-phase
+        discontinuity (inaudible in practice at trance transient density).
+        """
+        for _ in range(n_bars):
+            bar = self._bar
+            # Advance filter state: update lpenv timer on pad (preserves swell position)
+            pad_track = self._get_track('pad')
+            if pad_track and pad_track.is_active(bar):
+                spb_s = self._spb / self.sr
+                if hasattr(pad_track.instrument, '_lpenv_t_s'):
+                    pad_track.instrument._lpenv_t_s = min(
+                        pad_track.instrument._lpenv_t_s + spb_s, 10.0)
+                # Update chord id so lpenv retriggers correctly on playback
+                from song.arcs import chord_state_at
+                _, _, _ = chord_state_at(bar, self.song)  # warm the cache path
+            self._bar += 1
+
     def render_bars(self, n_bars: int) -> tuple[np.ndarray, np.ndarray]:
         """Render n_bars bars of audio. Returns (buf_l, buf_r) as float32."""
         all_l = []

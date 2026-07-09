@@ -47,6 +47,10 @@ def main():
                         help="Tempo in BPM (default: 140)")
     parser.add_argument("--bars",    type=int,   default=None,
                         help="Number of bars to render (default: infinite when streaming, 128 otherwise)")
+    parser.add_argument("--from-bar", type=int, default=0, metavar="BAR",
+                        help="Skip silently to BAR before streaming/rendering (default: 0). "
+                             "All instrument state (oscillator phases, filter, sidechain) is "
+                             "advanced correctly so the audio sounds right from that point.")
     parser.add_argument("--wav",     default=None,
                         help="Output WAV path (default: /tmp/trance_v3.wav when not streaming)")
     parser.add_argument("--out-midi", "-o", default=None,
@@ -103,6 +107,12 @@ def main():
     # Render (or stream)
     from song.renderer import SongRenderer
     renderer = SongRenderer(song, active_tracks=active_tracks)
+
+    if args.from_bar > 0:
+        print(f"  Fast-forwarding to bar {args.from_bar}...", end=" ", flush=True)
+        t_ff = time.time()
+        renderer.fast_forward(args.from_bar)
+        print(f"done in {(time.time() - t_ff)*1000:.0f}ms")
 
     # Resolve default paths only when not streaming (stream mode: no files unless requested)
     wav_path  = args.wav  or (None if args.stream else "/tmp/trance_v3.wav")
@@ -272,9 +282,10 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
     stop_event = threading.Event()
 
     def render_thread():
-        bar_idx = 0
+        bar_idx   = renderer._bar   # may be non-zero after --from-bar fast-forward
+        bars_done = 0
         while not stop_event.is_set():
-            if n_bars is not None and bar_idx >= n_bars:
+            if n_bars is not None and bars_done >= n_bars:
                 break
             t0 = time.time()
             bar_l, bar_r = renderer._render_bar()
@@ -283,7 +294,8 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
                 bar_r = bar_r * volume
             render_ms = (time.time() - t0) * 1000
             audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
-            bar_idx += 1
+            bar_idx  += 1
+            bars_done += 1
         audio_queue.put(SENTINEL)
 
     render_t = threading.Thread(target=render_thread, daemon=True)
