@@ -31,7 +31,7 @@ class SongRenderer:
         renderer.write_midi('/tmp/v3.mid')
     """
 
-    def __init__(self, song: 'Song'):
+    def __init__(self, song: 'Song', active_tracks: set = None):
         from song.theory import samples_per_bar, samples_per_sixteenth
         from song.theory import SIDECHAIN_DEPTH, SIDECHAIN_ATTACK_S
         from synth.effects import Sidechain
@@ -41,6 +41,7 @@ class SongRenderer:
         self._spb    = samples_per_bar(song.bpm, song.sr)
         self._sp16   = samples_per_sixteenth(song.bpm, song.sr)
         self._bar    = 0
+        self._active_tracks = active_tracks  # None = all active; set of names = filter
         self._sidechain = Sidechain(depth=SIDECHAIN_DEPTH,
                                     attack_s=SIDECHAIN_ATTACK_S, sr=song.sr)
         self._audio_l: list[np.ndarray] = []
@@ -149,7 +150,8 @@ class SongRenderer:
             kick_buf_r = mix_r.copy()
 
         # ── Hi-hat ───────────────────────────────────────────────────────────
-        if bar >= sb.get('hihat_on', 9999):
+        _hihat_allowed = self._active_tracks is None or 'hihat' in self._active_tracks
+        if _hihat_allowed and bar >= sb.get('hihat_on', 9999):
             kick_track2 = self._get_track('kick')
             if kick_track2:
                 from song.arcs import hihat_decay_arc
@@ -171,7 +173,8 @@ class SongRenderer:
                     mix_r[offset:end] += hh_r[:n]
 
         # ── Clap ─────────────────────────────────────────────────────────────
-        if bar >= sb.get('clap_on', 9999):
+        _clap_allowed = self._active_tracks is None or 'clap' in self._active_tracks
+        if _clap_allowed and bar >= sb.get('clap_on', 9999):
             kick_track3 = self._get_track('kick')
             if kick_track3:
                 cl_l, cl_r = kick_track3.instrument.render_clap(gain=GAIN_CLAP)
@@ -288,7 +291,9 @@ class SongRenderer:
         return 0
 
     def _get_track(self, instrument_type: str):
-        """Return the first Track matching instrument_type, or None."""
+        """Return the first Track matching instrument_type, or None if muted/absent."""
+        if self._active_tracks is not None and instrument_type not in self._active_tracks:
+            return None
         for t in self.song.tracks:
             if t.instrument_type == instrument_type:
                 return t

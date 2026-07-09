@@ -62,6 +62,12 @@ def main():
     parser.add_argument("--stream",  action="store_true",
                         help="Real-time bar-by-bar playback — render and play simultaneously "
                              "(requires sounddevice). Ctrl-C to stop.")
+    parser.add_argument("--solo", nargs="+", metavar="TRACK",
+                        help="Solo one or more tracks; all others are muted. "
+                             "Track names: kick pad lead bass hihat clap pulse")
+    parser.add_argument("--mute", nargs="+", metavar="TRACK",
+                        help="Mute one or more tracks. "
+                             "Track names: kick pad lead bass hihat clap pulse")
     args = parser.parse_args()
 
     print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
@@ -79,9 +85,20 @@ def main():
     print(f"  stage bars: " +
           "  ".join(f"{k}={v}" for k, v in list(song.stage_bars.items())[:6]))
 
+    # Resolve solo/mute into a set of active track names for the renderer.
+    all_tracks = [t.instrument_type for t in song.tracks]
+    if args.solo:
+        active_tracks = set(args.solo)
+        print(f"  SOLO: {sorted(active_tracks)}  (muting: {sorted(set(all_tracks) - active_tracks)})")
+    elif args.mute:
+        active_tracks = set(all_tracks) - set(args.mute)
+        print(f"  MUTE: {sorted(args.mute)}  (playing: {sorted(active_tracks)})")
+    else:
+        active_tracks = None  # all tracks active
+
     # Render (or stream)
     from song.renderer import SongRenderer
-    renderer = SongRenderer(song)
+    renderer = SongRenderer(song, active_tracks=active_tracks)
 
     # Resolve default paths only when not streaming (stream mode: no files unless requested)
     wav_path  = args.wav  or (None if args.stream else "/tmp/trance_v3.wav")
