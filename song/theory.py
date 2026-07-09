@@ -139,9 +139,9 @@ SIDECHAIN_ATTACK_S = 0.16   # recovery time constant (exponential)
 # different amplitude than SA's SuperDirt sampler, so we scale up melodic
 # instruments so they're audible against the kick. Kick stays at 1.0.
 GAIN_KICK  = 1.00   # .gain(1) — SA's confirmed value, unchanged
-GAIN_PAD   = 1.50   # scaled: our supersaw outputs ~3× quieter than SA's sampler
+GAIN_PAD   = 1.50   # pad is normalised by gain_sum (~3.0); this brings it to audible level
 GAIN_LEAD  = 0.90   # balanced: lead audible but doesn't overload brightness
-GAIN_BASS  = 1.20   # scaled: bass needs presence in the mix
+GAIN_BASS  = 0.55   # bass sawtooth+env peaks near 1.0 per note; 0.55 gives headroom
 GAIN_HIHAT = 0.50   # .gain(.5) — SA confirmed
 GAIN_CLAP  = 0.70   # .pg(.7) — SA confirmed
 GAIN_PULSE = 0.12

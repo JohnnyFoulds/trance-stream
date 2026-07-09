@@ -59,15 +59,15 @@ def _bandpass(
 # ---------------------------------------------------------------------------
 
 def kick(sr: int = 44100, seed: int = 42,
-         decay_s: float = 0.25, pitch_floor: float = 50.0
+         decay_s: float = 0.12, pitch_floor: float = 50.0
          ) -> tuple[np.ndarray, np.ndarray]:
     """Synthesise one kick drum hit.
 
     Model: sine wave with fast pitch drop + short noise click.
 
-    Pitch envelope: (pitch_floor + 100) Hz → pitch_floor Hz exponential drop,
-    time constant 50 ms.  Default: 150→50 Hz.
-    decay_s controls amplitude envelope length: punchy (0.12s) to boomy (0.35s).
+    Pitch envelope fitted to real TR-909 measurements:
+      285 Hz → 50 Hz, time constant 31 ms.
+    decay_s controls amplitude envelope length: punchy (0.12s) to boomy (0.25s).
     Click: high-frequency noise burst in the first 10 ms, tapered to zero.
     Total length: max(decay_s * 1.6, 0.2) seconds.
 
@@ -78,9 +78,10 @@ def kick(sr: int = 44100, seed: int = 42,
     n_samples = int(sr * total_s)
     t = np.arange(n_samples, dtype=np.float64) / sr
 
-    # Pitch envelope: exponential drop from (pitch_floor + 100) Hz to pitch_floor.
-    pitch_decay = 0.05
-    freq = pitch_floor + 100.0 * np.exp(-t / pitch_decay)
+    # Pitch envelope fitted to TR-909 zero-crossing measurements:
+    # starts at 285 Hz (floor + 235), decays with tau=31ms to floor=50 Hz.
+    pitch_decay = 0.031
+    freq = pitch_floor + 235.0 * np.exp(-t / pitch_decay)
 
     # Instantaneous phase via cumulative sum (vectorised, no sample loop).
     phase = 2.0 * np.pi * np.cumsum(freq) / sr

@@ -95,3 +95,39 @@ brew install tesseract ffmpeg   # macOS
 ```
 
 See `tools/requirements-research.txt` for pinned versions.
+
+---
+
+## strudel_debug.html
+
+Browser-based debug utility. Runs Switch Angel's actual Strudel pad code in the browser
+so you can hear the target sound directly and compare against what `bad_apple_cover.py` generates.
+
+```bash
+cd research
+python3 -m http.server 8765
+# open http://localhost:8765/strudel_debug.html
+```
+
+Must be served over HTTP (not `file://`) because AudioWorklets require a secure context.
+
+**Sections:**
+
+| # | What it plays | Why |
+|---|---------------|-----|
+| 1 | SA's pad alone — G minor, no kick | Ground truth for pad timbre |
+| 2 | SA's pad + kick — G minor | Matches t=40s of video GWXCCBsOMSg |
+| 3 | Pad in A minor (our key) | Edit and play to tune parameters live |
+
+Edit any textarea and hit Play again to hear the change immediately.
+No dependencies installed locally — loads `@strudel/web@latest` from unpkg at runtime.
+
+---
+
+## reference_audio/
+
+Analysis-only audio samples. **Never used as playback assets in the generator.**
+
+| File | Source | Purpose |
+|------|--------|---------|
+| `tr909_kick_reference.wav` | audiorealism.se BassDrum909-tune100-attack100-decay025.wav | TR-909 kick parameter fitting |

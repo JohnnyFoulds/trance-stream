@@ -28,11 +28,12 @@ class SupersawPad:
         Sample rate (default 44100)
     """
 
-    def __init__(self, root_midi: int = 48, cutoff_slider: float = 0.55,
+    def __init__(self, root_midi: int = 48, cutoff_slider: float = 0.50,
                  gain: float = None, sr: int = 44100,
                  detune_cents: float = 60.0,
                  room_size: float = 0.7,
-                 saw_count: int = 5):
+                 saw_count: int = 5,
+                 voicing_offsets: list = None):
         from song.theory import GAIN_PAD
         from synth.effects import SimpleFDN
 
@@ -43,6 +44,7 @@ class SupersawPad:
         self.detune_cents  = detune_cents
         self.saw_count     = saw_count
         self._fdn          = SimpleFDN(room_size=room_size, sr=sr)
+        self._voicing_offsets = voicing_offsets  # None = use PAD_VOICING_OFFSETS from theory
         self._osc_phases   = None  # shape (n_voices, saw_count), initialised on first render
         self._lpf_zi_l     = None  # LP filter state persisted across bars
         self._lpf_zi_r     = None
@@ -79,7 +81,7 @@ class SupersawPad:
         """
         import numpy as np
         from synth.oscillators import supersaw
-        from synth.filters import lpf, rlpf_to_hz
+        from synth.filters import lpf2, rlpf_to_hz
         from synth.envelopes import trancegate
         from song.theory import (PAD_VOICING_OFFSETS, TRANCEGATE_SPEED,
                                   TRANCEGATE_AMOUNT, samples_per_bar)
@@ -98,10 +100,12 @@ class SupersawPad:
         # Gain weights: root=1.0, -14 semitone doubling=0.35, -21 semitone=0.15
         # Source: docs/music_theory/02_sa_vocabulary_codified.md §1
         VOICING_GAINS = [1.0, 0.35, 0.15]
+        offsets = self._voicing_offsets if self._voicing_offsets is not None else PAD_VOICING_OFFSETS
+        gains   = VOICING_GAINS[:len(offsets)]
         all_notes   = []
         voice_gains = []
         for note in midi_notes:
-            for offset, vg in zip(PAD_VOICING_OFFSETS, VOICING_GAINS):
+            for offset, vg in zip(offsets, gains):
                 all_notes.append(note + offset)
                 voice_gains.append(vg)
 
@@ -125,7 +129,6 @@ class SupersawPad:
             for v in range(n_carry, n_voices):
                 self._osc_phases[v] = old[0] if old.shape[0] > 0 else np.zeros(self.saw_count)
 
-        root_gain = voice_gains[0]  # always 1.0
         for i, (note, vg) in enumerate(zip(all_notes, voice_gains)):
             note = max(0, min(127, note))
             l, r, new_phases = supersaw(note, n_samples, self.sr,
@@ -135,6 +138,13 @@ class SupersawPad:
             self._osc_phases[i] = new_phases   # store all saw_count phases
             buf_l += l * vg
             buf_r += r * vg
+
+        # Normalise by sum of voice gains so amplitude is independent of chord size.
+        # Without this, 6 voiced notes at gains 1.0/0.35/0.15 each sum to peak >1.0
+        # before any downstream gain, causing saturation in the master mix.
+        gain_sum = sum(voice_gains)
+        buf_l /= gain_sum
+        buf_r /= gain_sum
 
         # LP filter — SA's lpenv(2) behaviour:
         #   - Filter rests at slider value (base_hz = cutoff at rest)
@@ -171,8 +181,8 @@ class SupersawPad:
             swell_01 = float(np.exp(-mid_t / decay_s))   # 1.0 at trigger → 0.0 as time grows
             seg_cutoff = base_hz + (peak_hz - base_hz) * swell_01
             seg_cutoff = float(np.clip(seg_cutoff, 50.0, self.sr * 0.45))
-            buf_l[s:e], zi_l = lpf(buf_l[s:e], seg_cutoff, self.sr, zi_l)
-            buf_r[s:e], zi_r = lpf(buf_r[s:e], seg_cutoff, self.sr, zi_r)
+            buf_l[s:e], zi_l = lpf2(buf_l[s:e], seg_cutoff, 0.707, self.sr, zi_l)
+            buf_r[s:e], zi_r = lpf2(buf_r[s:e], seg_cutoff, 0.707, self.sr, zi_r)
         self._lpenv_t_s  += n_samples / self.sr   # advance the swell timer
         self._lpf_zi_l = zi_l
         self._lpf_zi_r = zi_r

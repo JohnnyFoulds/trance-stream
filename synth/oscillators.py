@@ -14,42 +14,44 @@ from __future__ import annotations
 import numpy as np
 
 
+def _polyblep(phase: np.ndarray, dt: float) -> np.ndarray:
+    """PolyBLEP correction term — smooths the discontinuity in a naive sawtooth.
+
+    Exact port of Strudel's polyBlep() in worklets.mjs.
+    phase: array in [0, 1). dt = freq / sr (phase increment per sample).
+    """
+    dt = min(dt, 1.0 - dt)
+    if dt < 1e-9:
+        return np.zeros_like(phase)
+    inv_dt = 1.0 / dt
+    out = np.zeros_like(phase)
+    # Near start of cycle (phase < dt): rising correction
+    mask_lo = phase < dt
+    t_lo = phase[mask_lo] * inv_dt
+    out[mask_lo] = t_lo + t_lo - t_lo * t_lo - 1.0
+    # Near end of cycle (phase > 1 - dt): falling correction
+    mask_hi = phase > (1.0 - dt)
+    t_hi = (phase[mask_hi] - 1.0) * inv_dt
+    out[mask_hi] = t_hi + t_hi + t_hi * t_hi + 1.0
+    return out
+
+
 def sawtooth(
     freq_hz: float,
     n_samples: int,
     sr: int,
     phase: float = 0.0,
 ) -> tuple[np.ndarray, float]:
-    """Bandlimited sawtooth via phase accumulation.
+    """PolyBLEP sawtooth — exact match to Strudel's sawblep() in worklets.mjs.
 
+    sawblep(phase, dt) = 2*phase - 1 - polyBlep(phase, dt)
     Returns (samples, final_phase) where final_phase is in [0, 1).
-    Shape: (n_samples,). dtype: float32.
-
-    Uses additive synthesis for band-limiting (sum of harmonics below Nyquist).
-    This avoids the aliasing that naive ramp-based sawtooth produces.
-    Harmonics: n=1..N where N = min(64, sr//2 // freq_hz - 1).
-
-    Returns (samples, end_phase) where end_phase is in [0,1) so the caller
-    can continue a sequence with phase continuity.
     """
     freq_hz = max(float(freq_hz), 1.0)
-    t = np.arange(n_samples, dtype=np.float64)
-    phase_vec = 2.0 * np.pi * (freq_hz / sr * t + phase)
-
-    n_harmonics = min(64, int(sr / 2 / freq_hz) - 1)
-    n_harmonics = max(1, n_harmonics)
-
-    # Loop over harmonics (max 64), not samples — O(H) not O(N).
-    samples = np.zeros(n_samples, dtype=np.float64)
-    for n in range(1, n_harmonics + 1):
-        samples += ((-1) ** (n + 1)) * (2.0 / (np.pi * n)) * np.sin(n * phase_vec)
-
-    # Additive synthesis has ~9% Gibbs overshoot at discontinuities; normalise.
-    peak = np.abs(samples).max()
-    if peak > 0:
-        samples /= peak
-
-    end_phase = (freq_hz * n_samples / sr + phase) % 1.0
+    dt = freq_hz / sr
+    phases = (phase + dt * np.arange(n_samples, dtype=np.float64)) % 1.0
+    samples = (2.0 * phases - 1.0) - _polyblep(phases, dt)
+    end_phase = (phase + dt * n_samples) % 1.0
     return samples.astype(np.float32), end_phase
 
 
@@ -62,55 +64,57 @@ def supersaw(
     pan: float = 0.0,
     osc_phases: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Supersaw: N detuned sawtooth voices, stereo output.
+    """Supersaw: N detuned PolyBLEP sawtooth voices, stereo output.
 
-    SA's confirmed params: saw_count=5, detune_cents=60.
-    Detune distributes voices evenly across [-detune_cents/2, +detune_cents/2].
-    Voice 0 = center, others spread symmetrically.
+    Exact port of Strudel's SuperSawOscillatorProcessor from worklets.mjs:
+    - Voices distributed evenly across [-detune_cents/2, +detune_cents/2] in semitones
+    - Stereo: voices alternate L/R by swapping gainL/gainR each voice (equal-power)
+    - Phase init: random per voice (matching Strudel's Math.random() initialisation)
+    - panspread=0.6 → gainL/gainR = sqrt(0.2)/sqrt(0.8) for outermost voices
 
-    Returns (buf_l, buf_r, osc_phases) where osc_phases shape = (saw_count,)
-    for phase continuity across calls.
-
-    Stereo placement: voices alternated L/R with equal power law.
-    If pan != 0.0: additional overall pan applied.
-    All voices summed and normalised by 1/saw_count.
+    SA's confirmed params: saw_count=5, detune_cents=60 (freqspread=0.6 semitones * 5 voices).
+    Note: Strudel's detune param is in semitones (freqspread), not cents.
+    SA uses .detune(.6) = 0.6 semitones spread (= 60 cents total across 5 voices).
     """
     base_freq = 440.0 * 2.0 ** ((midi_note - 69) / 12.0)
 
-    # Distribute voices evenly across [-detune_cents/2, +detune_cents/2].
-    # Voice at index saw_count//2 lands on 0 when saw_count is odd.
-    cent_offsets = np.linspace(-detune_cents / 2.0, detune_cents / 2.0, saw_count)
-    freq_ratios = 2.0 ** (cent_offsets / 1200.0)
-    freqs = base_freq * freq_ratios
+    # Strudel's getDetuner: evenly spread voices across [-freqspread/2, +freqspread/2] semitones
+    # SA's .detune(.6) = freqspread=0.6 semitones
+    freqspread_semitones = detune_cents / 100.0  # convert cents to semitones
+    if saw_count > 1:
+        scale = freqspread_semitones / (saw_count - 1)
+        center = freqspread_semitones * 0.5
+        detune_semitones = [i * scale - center for i in range(saw_count)]
+    else:
+        detune_semitones = [0.0]
 
+    freqs = [base_freq * (2.0 ** (d / 12.0)) for d in detune_semitones]
+
+    # Random phase init if not provided (matches Strudel's Math.random())
+    rng = np.random.default_rng(abs(midi_note) * 1000 + saw_count)
     if osc_phases is None:
-        osc_phases = np.zeros(saw_count, dtype=np.float64)
+        osc_phases = rng.random(saw_count)
 
     buf_l = np.zeros(n_samples, dtype=np.float64)
     buf_r = np.zeros(n_samples, dtype=np.float64)
     new_phases = np.empty(saw_count, dtype=np.float64)
 
+    # Strudel panspread: maps to gainL=sqrt(1-ps), gainR=sqrt(ps) where ps=panspread*0.5+0.5
+    # SA uses default panspread=0.4 → ps=0.7 → gainL=sqrt(0.3), gainR=sqrt(0.7)
+    panspread = 0.4  # SA default
+    ps = panspread * 0.5 + 0.5
+    gain_l = np.sqrt(1.0 - ps)
+    gain_r = np.sqrt(ps)
+
     for i in range(saw_count):
         voice, new_phases[i] = sawtooth(freqs[i], n_samples, sr, osc_phases[i])
-
-        # Equal-power stereo spread: alternate voices L/R.
-        # Angle 0 = full left, pi/2 = full right, pi/4 = centre.
-        # Voices interleave so adjacent voices sit on opposite sides.
-        spread_angle = (np.pi / 4.0) * (1.0 + ((-1) ** i) * (i / max(saw_count - 1, 1)))
-        l_gain = np.cos(spread_angle)
-        r_gain = np.sin(spread_angle)
-
-        buf_l += l_gain * voice
-        buf_r += r_gain * voice
+        buf_l += gain_l * voice
+        buf_r += gain_r * voice
+        # Strudel alternates L/R each voice
+        gain_l, gain_r = gain_r, gain_l
 
     buf_l /= saw_count
     buf_r /= saw_count
-
-    # Additional overall pan using equal-power law.
-    if pan != 0.0:
-        pan_angle = np.pi / 4.0 * (1.0 + pan)  # pan in [-1, 1] -> angle in [0, pi/2]
-        buf_l *= np.cos(pan_angle)
-        buf_r *= np.sin(pan_angle)
 
     return buf_l.astype(np.float32), buf_r.astype(np.float32), new_phases
 

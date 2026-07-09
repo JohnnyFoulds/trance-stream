@@ -22,7 +22,7 @@ class DrumKit:
     """
 
     def __init__(self, seed: int = 42, sr: int = 44100,
-                 kick_decay_s: float = 0.25, kick_pitch_floor: float = 50.0):
+                 kick_decay_s: float = 0.12, kick_pitch_floor: float = 50.0):
         from synth.drums import kick, hihat, clap
 
         self._sr   = sr

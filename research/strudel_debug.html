@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Strudel Debug — SA Pad Reference</title>
+<script src="https://unpkg.com/@strudel/web@latest"></script>
+<style>
+  body { background: #111; color: #eee; font-family: monospace; padding: 20px; max-width: 960px; margin: 0 auto; }
+  h1 { color: #50d1f8; margin-bottom: 4px; }
+  h2 { color: #8EDF5F; margin-top: 28px; margin-bottom: 8px; }
+  .section { background: #1a1a1a; border: 1px solid #333; padding: 16px; margin: 10px 0; border-radius: 4px; }
+  textarea { width: 100%; background: #0a0a0a; color: #50d1f8; border: 1px solid #444;
+             font-family: monospace; font-size: 13px; padding: 8px; box-sizing: border-box;
+             resize: vertical; line-height: 1.5; }
+  button { background: #50d1f8; color: #000; border: none; padding: 10px 22px; font-size: 14px;
+           font-family: monospace; cursor: pointer; margin: 4px 4px 0 0; border-radius: 3px; font-weight: bold; }
+  button:hover { background: #8EDF5F; }
+  button.stop { background: #E91E63; color: #fff; }
+  button.stop:hover { background: #ff5252; }
+  #status { color: #8EDF5F; padding: 6px 0; min-height: 22px; font-size: 13px; }
+  #error  { color: #E91E63; padding: 4px 0; white-space: pre-wrap; font-size: 12px; min-height: 16px; }
+  .note   { color: #666; font-size: 12px; margin-top: 8px; }
+  #tempo-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  #tempo-row label { color: #aaa; font-size: 13px; }
+  #bpm { background: #1a1a1a; color: #eee; border: 1px solid #444; padding: 4px 8px;
+         font-family: monospace; width: 60px; }
+</style>
+</head>
+<body>
+<h1>Strudel Debug — SA Pad Reference</h1>
+<div id="status">Loading Strudel…</div>
+<div id="error"></div>
+
+<div id="tempo-row">
+  <label>BPM: <input id="bpm" type="number" value="140" min="60" max="200"></label>
+  <button onclick="applyTempo()" style="padding:4px 12px;font-size:12px;">Apply Tempo</button>
+</div>
+
+<!-- ── Section 1: SA's pad alone ───────────────────────────────── -->
+<h2>1 — SA's Pad Only  (G minor, no kick)</h2>
+<div class="section">
+<textarea id="c1" rows="7">n("0").add(-14).scale("g:minor")
+  .s("supersaw").unison(5).detune(.6)
+  .trancegate(1.5, 45, 1)
+  .rlpf(0.5, 0.877)
+  .lpenv(2)
+  .room(.7)
+  .o(2)</textarea>
+<button onclick="playSnippet('c1')">▶ Play</button>
+<button class="stop" onclick="stopAll()">■ Stop</button>
+<div class="note">SA's exact pad code from video GWXCCBsOMSg — ground truth for pad timbre.</div>
+</div>
+
+<!-- ── Section 2: SA's pad + kick ──────────────────────────────── -->
+<h2>2 — SA's Pad + Kick  (G minor)</h2>
+<div class="section">
+<textarea id="c2" rows="10">stack(
+  s("bd:2!4").bank("RolandTR909").dec(.3),
+  n("0").add(-14).scale("g:minor")
+    .s("supersaw").unison(5).detune(.6)
+    .trancegate(1.5, 45, 1)
+    .rlpf(0.5, 0.877)
+    .lpenv(2)
+    .room(.7)
+    .o(2)
+)</textarea>
+<button onclick="playSnippet('c2')">▶ Play</button>
+<button class="stop" onclick="stopAll()">■ Stop</button>
+<div class="note">Kick + pad — matches t=40s of video GWXCCBsOMSg.</div>
+</div>
+
+<!-- ── Section 3: Experiment (A minor) ─────────────────────────── -->
+<h2>3 — Experiment  (A minor — our key)</h2>
+<div class="section">
+<textarea id="c3" rows="7">n("0").add(-14).scale("a:minor")
+  .s("supersaw").unison(5).detune(.6)
+  .trancegate(1.5, 45, 1)
+  .rlpf(0.5, 0.877)
+  .lpenv(2)
+  .room(.7)
+  .o(2)</textarea>
+<button onclick="playSnippet('c3')">▶ Play</button>
+<button class="stop" onclick="stopAll()">■ Stop</button>
+<div class="note">Edit rlpf, lpenv, detune, add(-14) etc. Hit Play after each change.</div>
+</div>
+
+<script>
+const statusEl = document.getElementById('status');
+const errorEl  = document.getElementById('error');
+
+let _evaluate = null;
+let _hush     = null;
+// SA's custom functions fetched once from her GitHub repo
+let _prebake  = null;
+
+const PREBAKE_URL =
+  'https://raw.githubusercontent.com/switchangel/strudel-scripts/main/prebake.strudel';
+
+async function loadPrebake() {
+  const res = await fetch(PREBAKE_URL);
+  if (!res.ok) throw new Error(`prebake fetch failed: ${res.status}`);
+  return await res.text();
+}
+
+(async () => {
+  try {
+    statusEl.textContent = 'Loading Strudel…';
+    const [api, prebake] = await Promise.all([
+      initStrudel(),
+      loadPrebake(),
+    ]);
+    _evaluate = api.evaluate;
+    _hush     = api.hush;
+    _prebake  = prebake;
+    // Bootstrap: run prebake once so all SA functions are registered
+    await _evaluate(_prebake);
+    statusEl.textContent = 'Ready — set BPM then click ▶ Play.';
+    applyTempo();
+  } catch(e) {
+    statusEl.textContent = 'Failed to load.';
+    errorEl.textContent = e?.message || String(e);
+    console.error(e);
+  }
+})();
+
+window.applyTempo = function() {
+  const bpm = parseFloat(document.getElementById('bpm').value) || 140;
+  try {
+    if (typeof setCpm === 'function') { setCpm(bpm / 4); }
+    else if (typeof setcps === 'function') { setcps(bpm / 240); }
+  } catch(e) { console.warn('tempo setter:', e); }
+};
+
+window.stopAll = function() {
+  if (_hush) { try { _hush(); } catch(e) {} }
+  statusEl.textContent = 'Stopped.';
+  errorEl.textContent = '';
+};
+
+window.playSnippet = async function(id) {
+  if (!_evaluate) { statusEl.textContent = 'Still loading…'; return; }
+  const code = document.getElementById(id).value.trim();
+  statusEl.textContent = 'Starting…';
+  errorEl.textContent = '';
+  try {
+    // Re-register SA functions then evaluate the snippet.
+    // evaluate() replaces the running pattern each call, so run both as one block.
+    await _evaluate(_prebake + '\n' + code);
+    applyTempo();
+    statusEl.textContent = 'Playing ▶';
+  } catch(e) {
+    statusEl.textContent = 'Error — see below.';
+    errorEl.textContent = e?.message || String(e);
+    console.error(e);
+  }
+};
+</script>
+</body>
+</html>
