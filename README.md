@@ -2,7 +2,7 @@
 
 A procedural trance music generator in the style of Switch Angel's live-coded
 Strudel sets. Streams stereo audio to your system output in real time, exports
-MIDI, and writes WAV files for offline analysis.
+WAV and MIDI, and is fully deterministic from a text seed.
 
 All audio is synthesised from mathematics — no samples, no soundfonts, fully
 DMCA-safe.
@@ -12,47 +12,72 @@ DMCA-safe.
 ## Quick start
 
 ```bash
-pip install numpy sounddevice MIDIUtil
-python trance_stream_v2.py
+pip install numpy scipy sounddevice mido
+python trance_stream_v3.py --stream
 ```
 
-Plays indefinitely at 140 BPM. Press Ctrl+C to stop.
+Plays 128 bars at 140 BPM. Press Ctrl+C to stop.
 
 ---
 
-## Scripts
+## CLI reference
 
-| Script | Status | Description |
-|--------|--------|-------------|
-| `trance_stream_v2.py` | **Current** | Full rewrite from Switch Angel's actual Strudel code |
-| `trance_stream.py` | Legacy | Original v1 — kept for reference |
+```
+python trance_stream_v3.py [OPTIONS]
 
-Use `trance_stream_v2.py` for everything. The v1 script is preserved but no
-longer actively developed.
+  -s, --seed SEED       Text seed for deterministic generation (default: sunrise)
+                        Same seed + mood always produces the same track.
+
+  -m, --mood MOOD       Harmonic character (default: uplifting)
+                        uplifting | dark | acid | dreamy | progressive
+
+      --bpm BPM         Tempo in BPM (default: 140)
+
+      --bars N          Number of bars to generate (default: 128)
+
+      --volume V        Master volume 0.0–1.0 (default: 1.0)
+
+      --stream          Real-time bar-by-bar playback. Ctrl-C to stop.
+
+      --wav PATH        Write output to a WAV file (default when not streaming:
+                        /tmp/trance_v3.wav)
+
+  -o, --out-midi PATH   Write a MIDI file (default when not streaming:
+                        /tmp/trance_v3.mid)
+
+      --solo TRACK ...  Solo one or more tracks; all others are muted.
+      --mute TRACK ...  Mute one or more tracks.
+
+                        Track names: kick  pad  lead  bass  hihat  clap  pulse
+
+      --analyse         Print spectral/MIDI analysis after rendering
+      --spectrogram     Generate a spectrogram PNG after rendering
+      --play            Play back the WAV after batch rendering
+```
 
 ---
 
-## CLI reference — v2
+## Track isolation (solo / mute)
 
-```
-python trance_stream_v2.py [OPTIONS]
+Standard DAW solo and mute for diagnosing what each element sounds like in
+isolation. Useful when something sounds wrong and you want to identify which
+track is responsible.
 
-  --mood        Harmonic character (default: uplifting)
-                uplifting | dark | acid | progressive | dreamy
+```bash
+# Hear only the kick
+python trance_stream_v3.py --stream --solo kick
 
-  -b, --bpm     Tempo in BPM (default: 140)
+# Hear only the lead synth
+python trance_stream_v3.py --stream --solo lead
 
-  -s, --seed    Text seed for deterministic generation (default: center)
-                Any string — same seed + mood always produces the same track.
-                Different seeds give different keys, patterns, and timing.
+# Hear everything except the lead
+python trance_stream_v3.py --stream --mute lead
 
-  -v, --volume  Master volume 0.0–1.0 (default: 0.90)
+# Pad + bass together — check harmonic content without rhythm
+python trance_stream_v3.py --stream --solo pad bass
 
-  -o, --out_midi   Write a MIDI file to this path on exit
-
-      --bars    Stop after N bars then fade out (default: 0 = infinite)
-
-      --wav     Write output to a WAV file instead of playing live
+# Diagnose lead entering at bar 7 with no other distractions
+python trance_stream_v3.py --stream --solo lead --bars 20
 ```
 
 ---
@@ -61,203 +86,117 @@ python trance_stream_v2.py [OPTIONS]
 
 The two main levers are `--mood` and `--seed`.
 
-**`--mood`** sets the harmonic character: scale, chord progression, and overall
-emotional texture.
+**`--mood`** sets the harmonic character: scale, chord progression, and BPM
+range.
 
 **`--seed`** is a free-text string. It derives the root key via MD5 hash
-(deterministic but non-obvious), picks the notearp rhythmic pattern, offsets
-the 11 arrangement stage timings, and positions the two filter-arc pullbacks.
+(deterministic but non-obvious), picks the chord progression variant, offsets
+the arrangement stage timings, and controls lead character and arc shape.
 Same seed + mood always gives the same track.
 
 ```bash
-# Uplifting — i → iv → III → v in a seed-derived key
-python trance_stream_v2.py --mood uplifting -s "sunrise"
+# Uplifting — euphoric arc, natural minor
+python trance_stream_v3.py --stream --mood uplifting -s "sunrise"
 
-# Dark — i → iv → i → viidim, tighter gate
-python trance_stream_v2.py --mood dark -s "midnight" -b 145
+# Dark — tension loop, slower BPM
+python trance_stream_v3.py --stream --mood dark -s "midnight"
 
-# Acid — i → III → iv → III loop
-python trance_stream_v2.py --mood acid -s "303"
+# Acid — hypnotic i → III → iv loop
+python trance_stream_v3.py --stream --mood acid -s "303"
 
-# Progressive — major scale, I → IV → V → ii
-python trance_stream_v2.py --mood progressive -s "journey"
+# Progressive — major scale, bright and groovy
+python trance_stream_v3.py --stream --mood progressive -s "journey"
 
-# Dreamy — dorian scale, i → iv → ii → III
-python trance_stream_v2.py --mood dreamy -s "velvet sphinx"
-```
-
-The startup line shows what was generated from your seed:
-
-```
-[v2] seed=sunrise mood=uplifting root=F key=Fm prog=i-iv-III-v arp_variant=3
+# Dreamy — dorian scale, bittersweet
+python trance_stream_v3.py --stream --mood dreamy -s "velvet sphinx"
 ```
 
 ---
 
 ## Moods
 
-| Mood | Scale | Progression | Character |
+| Mood | Scale | Chord roots | BPM range |
 |------|-------|-------------|-----------|
-| `uplifting` | Natural minor | i → iv → III → v | Euphoric, soaring |
-| `dark` | Natural minor | i → iv → i → viidim | Tense, driving |
-| `acid` | Natural minor | i → III → iv → III | Hypnotic, cyclic |
-| `progressive` | Major | I → IV → V → ii | Bright, groovy |
-| `dreamy` | Dorian | i → iv → ii → III | Bittersweet, floating |
+| `uplifting` | Natural minor | i – VI – III – v | 138–142 |
+| `dark` | Natural minor | i – iv – i – VII | 136–140 |
+| `acid` | Natural minor | i – III – iv – III | 138–145 |
+| `progressive` | Major | I – IV – V – ii | 128–138 |
+| `dreamy` | Dorian | i – V – VI – III | 128–136 |
+
+Each chord entry carries a root and a fifth so the lead notearp has two
+distinct pitches to arpeggiate between.
 
 ---
 
 ## Arrangement
 
-v2 uses an **additive stage model** — voices enter one at a time and stay.
-There is no breakdown or drop (this matches Switch Angel's actual live-coding
-approach: her arc is strictly additive over a 5–8 minute session).
+v3 uses an **additive stage model** — voices enter one at a time and stay.
+There is no breakdown or drop (this matches Switch Angel's live-coding
+approach).
 
-The 11 stages and their default bar positions (shifted ±4 bars per seed):
+Default stage positions (shifted ±4 bars per seed):
 
 | Stage | Default bar | What happens |
 |-------|-------------|--------------|
-| kick_on | 0 | Kick drum enters |
-| pad_on | 2 | Pad enters on single root note |
+| kick_on | 0 | Kick drum — four-on-floor |
+| pad_root_on | 2 | Pad enters on single root note |
+| bass_on | 4 | Acid bass enters — rhythmic pattern from SA's bstruct |
 | lead_root_on | 8 | Lead enters on single root note |
-| lead_melody_on | 24 | Lead gets full notearp melody + delay |
-| pad_chord_on | 40 | Pad gains moving chord pattern + seg 16 |
-| lead_voicing_on | 48 | Lead gains bar-varying voicing shift |
-| clap_on | 72 | Backbeat clap added |
-| fm_on | 96 | FM modulation opens on lead |
-| pulse_on | 108 | Pulse texture shimmer layer added |
+| lead_melody_on | 16 | Lead gets full notearp melody + delay |
+| pad_chord_on | 20 | Pad gains moving chord + trancegate |
+| lead_voicing_on | 32 | Lead gains bar-varying voicing shift |
+| clap_on | 56 | Backbeat clap added |
+| fm_on | 88 | FM modulation opens on lead |
+| pulse_on | 100 | Pulse texture shimmer layer |
 | hihat_on | 112 | Hi-hat added |
-| kick_syncopated | 116 | Kick upgrades from 4-on-floor to beat(0,4,8,11,14) |
+| kick_syncopated | 116 | Kick upgrades to beat(0,4,8,11,14) |
 
 ---
 
-## Parameter arcs
+## Synthesis
 
-Three synthesis parameters evolve continuously over the session, independent of
-the stage system. These match documented slider movement in Switch Angel's videos:
+| Voice | Signal chain |
+|-------|-------------|
+| **Kick** | Sine sweep + noise transient, 400 ms tail |
+| **Pad** | 5-voice supersaw → LP envelope → trancegate (1.5×) → FDN reverb → sidechain |
+| **Bass** | Sawtooth → acidenv LP sweep → LPF; fires per step from SA's bstruct rhythm |
+| **Lead** | 3-voice supersaw + FM → acidenv LP sweep → trancegate → ping-pong delay |
+| **Hi-hat** | White noise → HPF → exponential decay; tri-LFO varies decay |
+| **Clap** | Filtered noise burst, backbeat (steps 4, 12) |
+| **Pulse** | Pulse oscillator × 16 triggers per bar, FM-modulated by time |
 
-**Filter cutoff** (`rlpf slider`): starts at ~2.8 kHz, opens to ~12 kHz by
-bar 128. Two deliberate pullbacks (darker moments) at seed-determined positions.
-
-**FM depth**: zero for the first ~96 bars, then ramps to 0.55 — adds metallic
-texture and warmth to the lead in the second half of the session.
-
-**Delay wet** (lead): opens toward a 0.80 wash around bar 48 (maximum spatial
-depth), then pulls back to 0.50 for clarity. The delay is always 70% wet /
-80% feedback / quarter-note time.
-
-**AcidEnv brightness**: steadily brightens from 0.44 → 0.85 over the full
-session — notes become punchier and more present as the arrangement fills in.
+All oscillators maintain phase continuity across bar boundaries (no click
+artefacts at transitions). Kick tails overflow into the next bar. Sidechain
+uses a stateful IIR follower so ducking recovers smoothly across bars.
 
 ---
 
-## Synthesis — what v2 does differently from v1
-
-v2 was rebuilt from scratch after OCR-analysing 311 code snapshots extracted
-from Switch Angel's YouTube live-coding sessions. See
-`research/analysis/switch_angel_vocabulary.md` for the full reference.
-
-| Element | v1 | v2 |
-|---------|----|----|
-| Kick pattern | Four-on-floor | Syncopated beat(0,4,8,11,14) |
-| Hi-hat | Absent | white!16, HPF 1200Hz, tri-LFO decay |
-| Clap | Absent | Backbeat (steps 4, 12) |
-| Trancegate | Binary on/off | Smooth cosine, 1.5× bar rate |
-| Lead | 3-voice stack held 4 bars | Notearp rhythmic pattern, acidenv |
-| Lead FM | Absent | Brown noise FM, depth follows arc |
-| Lead delay | Absent | 70% wet / 80% feedback / quarter-note |
-| Pad | Moving chords, binary gate | seg-16 retrigger, acidenv, smooth gate |
-| Filter | Static closed LPF | Open (lpenv sweep per trigger + arc) |
-| Pulse texture | Absent | pulse!16 FM-time modulated |
-| Arrangement | 5-phase loop | 11 additive stages, no breakdown/drop |
-| Seed variation | Root key only | Key + scale + chord prog + arp pattern + stage timing + filter arcs |
-
----
-
-## Exporting WAV and MIDI
+## Exporting
 
 ```bash
-# Render 128 bars to WAV (no audio hardware needed)
-python trance_stream_v2.py --bars 128 --wav out.wav -s "sunrise" --mood uplifting
+# Render 128 bars to WAV only (no audio hardware needed)
+python trance_stream_v3.py --bars 128 --wav out.wav -s "sunrise"
 
-# Write MIDI on exit
-python trance_stream_v2.py --bars 64 --wav out.wav -o out.mid -s "sunrise"
+# Stream and write WAV simultaneously
+python trance_stream_v3.py --stream --bars 128 --wav out.wav -s "sunrise"
+
+# Write MIDI
+python trance_stream_v3.py --bars 64 --wav out.wav -o out.mid -s "sunrise"
 ```
 
-MIDI channel assignments:
-
-| Channel | Voice |
-|---------|-------|
-| 0 | Lead |
-| 4 | Kick |
-
----
-
-## Terminal output
-
-One line per bar:
-
-```
-[v2] bar=   1  stages=1/11  K:0.04 P:0.00 L:0.00  filt=1.9kHz fm=0.00 dly=0.55
-[v2] bar=   9  stages=3/11  K:1.00 P:0.99 L:0.04  filt=2.2kHz fm=0.00 dly=0.55
-[v2] bar=  41  stages=5/11  K:1.00 P:1.00 L:1.00  filt=3.1kHz fm=0.00 dly=0.71
-[v2] bar=  97  stages=8/11  K:1.00 P:1.00 L:1.00  filt=8.7kHz fm=0.05 dly=0.60
-[v2] bar= 117  stages=11/11 K:1.00 P:1.00 L:1.00  filt=11kHz  fm=0.40 dly=0.50
-```
-
-Fields: bar number · stages active · kick/pad/lead gain · filter cutoff · FM depth · delay wet.
-
----
-
-## Research pipeline
-
-The `research/` directory contains the full reproducibility pipeline used to
-extract Switch Angel's synthesis parameters from her YouTube videos.
-
-```
-research/
-  analysis/
-    switch_angel_vocabulary.md    — synthesis parameters, end-state reference
-    switch_angel_song_structure.md — temporal arc, build order, variation techniques
-  extracted/
-    <video_id>/
-      code.jsonl    — timestamped OCR'd code snapshots
-      summary.md    — annotated code evolution
-  README.md         — pipeline documentation
-```
-
-To re-extract from the videos:
-
-```bash
-# Install research deps
-pip install -r tools/requirements-research.txt
-brew install tesseract ffmpeg   # macOS
-
-# Download the 5 canonical videos
-python tools/download_videos.py
-
-# Extract and OCR
-python tools/extract_strudel_code.py
-```
-
-Raw video files are excluded from git (too large). Extracted text
-(`code.jsonl`, `summary.md`) is committed.
+WAV and stream output are sample-identical (same seed, same path, same result).
 
 ---
 
 ## Diagnostic tools
 
 ```bash
-# Render offline
-python trance_stream_v2.py --bars 32 --wav /tmp/out.wav -s center
-
 # Spectral report
-python tools/analyse_audio.py /tmp/out.wav
+python tools/analyse_audio.py /tmp/trance_v3.wav
 
 # Spectrogram image
-python tools/spectrogram.py /tmp/out.wav --out /tmp/spec.png
+python tools/spectrogram.py /tmp/trance_v3.wav --out /tmp/spec.png
 ```
-
-See `tools/README.md` for full usage.
 
 ---
 
@@ -266,31 +205,29 @@ See `tools/README.md` for full usage.
 | Package | Purpose |
 |---------|---------|
 | `numpy` | Audio buffer arithmetic |
+| `scipy` | Filters (`lfilter`), stateful IIR |
 | `sounddevice` | Real-time stereo PCM output |
-| `MIDIUtil` | MIDI file construction |
+| `mido` | MIDI file construction |
 
 ```bash
-pip install numpy sounddevice MIDIUtil
+pip install numpy scipy sounddevice mido
 ```
 
 Python 3.10 or later required.
 
 ---
 
-## Reference
+## Research
 
-Target sound: Switch Angel's live-coded trance sets.
-
-- YouTube channel: `https://www.youtube.com/@Switch-Angel`
-- 311 OCR'd code snapshots across 5 videos — see `research/extracted/`
-- Full synthesis and structural analysis — see `research/analysis/`
+Built from 311 OCR'd code snapshots across 5 of Switch Angel's YouTube
+live-coding sessions. See `research/analysis/switch_angel_vocabulary.md`
+for the full synthesis parameter reference.
 
 TranceStream does not copy or depend on her code. The research was used to
-understand the target synthesis chain and composition approach; all code is
-original.
+understand the target synthesis chain; all code is original.
 
 ---
 
 ## License
 
-Mozilla Public License 2.0 — see the header of `trance_stream_v2.py`.
+Mozilla Public License 2.0.
