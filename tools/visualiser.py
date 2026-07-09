@@ -319,7 +319,7 @@ class Visualiser:
             wide = cols >= 100
             fixed = _FIXED_LINES_WIDE if wide else _FIXED_LINES_NARROW
             ca_lines = max(1, rows - fixed)
-            lines = self._render(info, cols, rows, wide, ca_lines)
+            lines = self._render(info, cols, rows, wide, ca_lines, hit_map=hit_map)
             sys.stdout.write(_HOME)
             sys.stdout.write('\n'.join(lines))
             sys.stdout.flush()
@@ -466,7 +466,8 @@ class Visualiser:
     # differing only in label verbosity and whether timing row appears.
     # ------------------------------------------------------------------
     def _render(self, info: BarInfo, cols: int, rows: int,
-                wide: bool, ca_lines: int) -> list[str]:
+                wide: bool, ca_lines: int,
+                hit_map: Optional[dict] = None) -> list[str]:
         inner = cols - 6   # usable width: ║(1) + sp(2) + content + sp(2) + ║(1)
 
         def row(content: str) -> str:
@@ -506,21 +507,30 @@ class Visualiser:
             )
 
         # ── Track indicators ──────────────────────────────────────────
+        _PERCUSSIVE = {'kick', 'hihat', 'clap', 'bass'}
+        _hm = hit_map or {}
+
+        def dot(name: str, short: str = None) -> str:
+            label = (short or name).upper()
+            active  = info.tracks_active.get(name, False)
+            hitting = _hm.get(name, False)
+            if not active:
+                return (f'{_DIM}{label} ○{_RESET}' if wide else f'{_DIM}{short}○{_RESET}')
+            if hitting:
+                return (f'{label} {_BOLD}{_GREEN}●{_RESET}' if wide
+                        else f'{_BOLD}{_GREEN}{short}●{_RESET}')
+            elif name in _PERCUSSIVE:
+                return f'{label} ○' if wide else f'{short}○'
+            else:
+                return (f'{_DIM}{label} {_GREEN}●{_RESET}' if wide
+                        else f'{_DIM}{_GREEN}{short}●{_RESET}')
+
         if wide:
-            def dot(name: str, short: str = None) -> str:
-                label = (short or name).upper()
-                active = info.tracks_active.get(name, False)
-                return (f'{label} {_GREEN}●{_RESET}' if active
-                        else f'{_DIM}{label} ○{_RESET}')
             tracks_row = '   '.join([
                 dot('kick'), dot('pad'), dot('bass'), dot('lead'),
                 dot('hihat'), dot('clap'), dot('pulse'),
             ])
         else:
-            def dot(name: str, short: str) -> str:
-                active = info.tracks_active.get(name, False)
-                return (f'{short}{_GREEN}●{_RESET}' if active
-                        else f'{_DIM}{short}○{_RESET}')
             tracks_row = '  '.join([
                 dot('kick', 'K'), dot('pad', 'P'), dot('bass', 'B'), dot('lead', 'L'),
                 dot('hihat', 'H'), dot('clap', 'C'), dot('pulse', 'U'),
