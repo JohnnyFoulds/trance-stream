@@ -42,7 +42,7 @@ python trance_stream_v3.py [OPTIONS]
 
       --viz             Full-screen text visualiser while streaming.
                         Shows chord, filter arc, active tracks, trancegate phase,
-                        and a Rule-30 cellular automaton animation.
+                        and a Rule-30 cellular automaton spacetime diagram.
                         Only valid with --stream.
 
       --wav PATH        Write output to a WAV file (default when not streaming:
@@ -178,6 +178,66 @@ Sidechain uses a stateful IIR follower so ducking recovers smoothly across bars.
 
 Stream uses a dedicated render thread feeding a queue so the audio thread
 never stalls between bars.
+
+---
+
+## Visualiser
+
+```bash
+python trance_stream_v3.py --stream --viz --seed dawn --mood uplifting
+```
+
+Renders a full-screen text display that updates once per bar. Layout
+adapts to terminal width: wide (≥ 100 cols) shows full labels and timing
+stats; narrow (< 100 cols) uses compact abbreviations.
+
+### UI panels
+
+| Panel | What it shows |
+|-------|--------------|
+| Header | Seed, mood, BPM |
+| Info row | Bar number, current chord name, filter cutoff in Hz, FM depth % |
+| Track row | Seven track indicators — `●` (active, green) or `○` (inactive, dim) |
+| Filter bar | Cyan filled bar tracking the cutoff arc from ~850 Hz to ~12 kHz |
+| Gate bar | `●` cursor showing the trancegate position within the current bar cycle |
+| CA diagram | Rule-30 cellular automaton spacetime history (see below) |
+| Timing row | Render time, bar budget, headroom in ms (wide layout only) |
+
+### CA diagram — reading the colours
+
+The automaton section fills all available terminal rows and uses the full
+width (one character per cell). Each bar appends a new row at the bottom;
+older rows scroll up. Two musical properties are encoded in the colour:
+
+**Hue = chord.** Each of the four chords in the progression has its own
+colour. Reading horizontal bands in the history shows the harmonic cycle:
+
+| Colour | Chord index | Role in progression |
+|--------|-------------|---------------------|
+| Cyan   | 0 | Tonic — home, stable |
+| Green  | 1 | First movement away from tonic |
+| Yellow | 2 | Tension chord |
+| Magenta | 3 | Release / turnaround |
+
+A colour change in the diagram means a chord change in the music. Wide
+bands = that chord holds for several bars; narrow bands = quick movement.
+
+**Brightness = filter arc / session energy.** The filter cutoff opens
+gradually over the session, driving the characteristic trance energy build:
+
+| Brightness | Filter slider | Filter Hz | Session phase |
+|------------|--------------|-----------|---------------|
+| Dim | < 0.5 | < ~2985 Hz | Early, closed |
+| Normal | 0.5 – 0.7 | ~2985 – 5096 Hz | Mid session |
+| Bold | > 0.7 | > ~5096 Hz | Late, open |
+
+There is a deliberate dim dip around bar 64 (the pullback moment), then
+rows go bold and stay bold once the filter fully opens around bar 96.
+Reading the diagram top-to-bottom is reading the harmonic and energy
+history of the entire stream.
+
+**"Rule 30"** appears as a dim overlay on the rightmost edge of the newest
+row — ambient metadata, not part of the pattern.
 
 ---
 
