@@ -88,10 +88,10 @@ class SongRenderer:
         mix_l = np.zeros(spb, dtype=np.float32)
         mix_r = np.zeros(spb, dtype=np.float32)
 
-        # Current chord for this bar
-        chord_idx     = self._chord_index(bar)
-        chord_degrees = song.chord_prog[chord_idx]
-        chord_midi    = chord_to_midi(chord_degrees, song.root_midi, song.scale)
+        # Current chord for this bar — uses phase-aware progression and root
+        chord_prog, _, effective_root, chord_idx = self._chord_state(bar)
+        chord_degrees = chord_prog[chord_idx]
+        chord_midi    = chord_to_midi(chord_degrees, effective_root, song.scale)
 
         kick_buf_l = None
         kick_buf_r = None
@@ -287,24 +287,23 @@ class SongRenderer:
         self._bar += 1
         return mix_l, mix_r
 
-    def _chord_index(self, bar: int) -> int:
-        """Return current chord progression index based on bar number.
-
-        Cycles through the chord progression using PAD_CHORD_WEIGHTS for
-        relative durations.  SA's sa_canonical pattern holds degrees 3 and 5
-        for 3 bars each, and degrees 4 and 6 for 1 bar each (weights [3,1,3,1]),
-        giving an 8-bar cycle.
-        """
-        from song.theory import PAD_CHORD_WEIGHTS
-        weights = self.song.chord_weights if self.song.chord_weights else PAD_CHORD_WEIGHTS
+    def _chord_state(self, bar: int) -> tuple:
+        """Return (chord_prog, chord_weights, root_midi, chord_idx) for a bar."""
+        from song.arcs import chord_state_at
+        prog, weights, root = chord_state_at(bar, self.song)
         cycle_len = sum(weights)
         pos = bar % cycle_len
         cumulative = 0
         for i, w in enumerate(weights):
             cumulative += w
             if pos < cumulative:
-                return i % len(self.song.chord_prog)
-        return 0
+                return prog, weights, root, i % len(prog)
+        return prog, weights, root, 0
+
+    def _chord_index(self, bar: int) -> int:
+        """Return current chord index (kept for compatibility)."""
+        _, _, _, idx = self._chord_state(bar)
+        return idx
 
     def _get_track(self, instrument_type: str):
         """Return the first Track matching instrument_type, or None if muted/absent."""
@@ -349,7 +348,9 @@ class SongRenderer:
         -1 entries in SA_NOTEARP_PATTERN become -1 in the output (rests).
         """
         from song.theory import SA_NOTEARP_PATTERN, chord_to_midi
-        chord_midi = chord_to_midi(chord_degrees, self.song.root_midi, self.song.scale)
+        from song.arcs import chord_state_at
+        _, _, effective_root = chord_state_at(bar, self.song)
+        chord_midi = chord_to_midi(chord_degrees, effective_root, self.song.scale)
         notes = []
         for idx in SA_NOTEARP_PATTERN:
             if idx >= 0:

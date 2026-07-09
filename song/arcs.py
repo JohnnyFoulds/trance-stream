@@ -97,3 +97,28 @@ def gain_arc(bar: int, base_gain: float,
         return 0.0
     t = min((bar - fade_in_bar) / max(fade_in_bars, 1), 1.0)
     return base_gain * t
+
+
+def chord_state_at(bar: int, song: 'Song') -> tuple:
+    """Return (chord_prog, chord_weights, effective_root_midi) for a given bar.
+
+    Before the pullback bar: progression A, weights [3,1,3,1], original root.
+    After the pullback: progression B, tightened weights [2,1,2,1], root+shift.
+
+    This is a pure function — no side effects. Used by both the renderer
+    and the visualiser so both agree on which chord is playing.
+    """
+    from song.theory import PAD_CHORD_WEIGHTS
+
+    if bar < song.filter_pb_bar:
+        prog    = song.chord_prog
+        weights = song.chord_weights if song.chord_weights else PAD_CHORD_WEIGHTS
+        root    = song.root_midi
+    else:
+        prog    = song.chord_prog_b if song.chord_prog_b else song.chord_prog
+        # Tighten weights after pullback: [3,1,3,1] → [2,1,2,1]
+        base_w  = song.chord_weights if song.chord_weights else PAD_CHORD_WEIGHTS
+        weights = [max(1, w - 1) for w in base_w]
+        root    = song.root_midi + (song.root_shift if song.root_shift else 0)
+
+    return prog, weights, root

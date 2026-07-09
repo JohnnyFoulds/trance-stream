@@ -95,11 +95,11 @@ def make_bar_info(bar_idx: int, song, render_ms: float, bar_dur_ms: float) -> Ba
     import os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-    from song.arcs import filter_cutoff_arc, fm_depth_arc
-    from song.theory import rlpf_to_hz, chord_to_midi, TRANCEGATE_SPEED, PAD_CHORD_WEIGHTS
+    from song.arcs import filter_cutoff_arc, fm_depth_arc, chord_state_at
+    from song.theory import rlpf_to_hz, chord_to_midi, TRANCEGATE_SPEED
 
-    # Chord index — replicate SongRenderer._chord_index logic
-    weights = song.chord_weights if song.chord_weights else PAD_CHORD_WEIGHTS
+    # Chord index — phase-aware, matches SongRenderer exactly
+    prog, weights, effective_root = chord_state_at(bar_idx, song)
     cycle_len = sum(weights)
     pos = bar_idx % cycle_len
     cumulative = 0
@@ -107,11 +107,11 @@ def make_bar_info(bar_idx: int, song, render_ms: float, bar_dur_ms: float) -> Ba
     for i, w in enumerate(weights):
         cumulative += w
         if pos < cumulative:
-            chord_idx = i % len(song.chord_prog)
+            chord_idx = i % len(prog)
             break
 
-    chord_degrees = song.chord_prog[chord_idx]
-    chord_name = _chord_name(song.root_midi, chord_degrees, song.scale)
+    chord_degrees = prog[chord_idx]
+    chord_name = _chord_name(effective_root, chord_degrees, song.scale)
 
     slider = filter_cutoff_arc(bar_idx, song.filter_pb_bar)
     filter_hz = rlpf_to_hz(slider)

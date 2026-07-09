@@ -37,3 +37,7 @@ class Song:
     kick_pitch_floor: float = 50.0    # kick bottom pitch: tight (70 Hz) to sub (30 Hz)
     hihat_pattern:    str   = 'full'  # 'full' (all-16), 'offbeat' (8ths), 'sparse' (odd 8ths)
     arc_shape:        str   = 'steady'  # 'fast', 'steady', or 'slow'
+
+    # Harmonic modulation — creates a second-half shift at the pullback
+    chord_prog_b:   list = None   # second progression used after filter_pb_bar; None = loop A forever
+    root_shift:     int  = 0      # semitones added to root after pullback (0 or +2)

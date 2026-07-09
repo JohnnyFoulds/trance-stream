@@ -99,9 +99,15 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
         bpm_lo, bpm_hi = _BPM_RANGE[mood]
         bpm = bpm_lo + (_hash_bits(8, 8) % (bpm_hi - bpm_lo + 1))
 
-    # Chord progression: seed selects from mood's pool
-    prog_pool = _PROGRESSIONS_BY_MOOD[mood]
-    chord_prog = prog_pool[_hash_bits(16, 4) % len(prog_pool)]
+    # Chord progressions: seed selects A from pool; B is a different entry
+    prog_pool  = _PROGRESSIONS_BY_MOOD[mood]
+    prog_a_idx = _hash_bits(16, 4) % len(prog_pool)
+    chord_prog = prog_pool[prog_a_idx]
+    # B is the next entry in the pool (wraps), guaranteeing it differs from A
+    chord_prog_b = prog_pool[(prog_a_idx + 1) % len(prog_pool)]
+
+    # Root shift at pullback: 0 (no shift) or +2 semitones (classic trance lift)
+    root_shift = 2 if (_hash_bits(128, 1) == 1) else 0
 
     # Notearp pattern: seed selects from pool
     notearp = _NOTEARP_PATTERNS[_hash_bits(20, 4) % len(_NOTEARP_PATTERNS)]
@@ -206,6 +212,8 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
         kick_pitch_floor=float(kick_pitch_floor),
         hihat_pattern=hihat_pattern,
         arc_shape=arc_shape,
+        chord_prog_b=chord_prog_b,
+        root_shift=root_shift,
     )
 
 
