@@ -199,7 +199,7 @@ class Sidechain:
         self._depth = float(depth)
         self._attack_s = float(attack_s)
         self._sr = sr
-        self._gain_state = 1.0  # persists between bars
+        self._env_state = np.zeros(1, dtype=np.float64)  # IIR filter state
 
     def process(
         self,
@@ -209,9 +209,9 @@ class Sidechain:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Apply sidechain ducking using kick_l as the key signal.
 
-        Rectifies kick_l to obtain an envelope, smooths it with a
-        one-pole IIR (scipy lfilter — no sample loop), normalises to
-        [0, 1], then multiplies signal_l/signal_r by the gain curve.
+        Rectifies kick_l to obtain an envelope, smooths it with a stateful
+        one-pole IIR (scipy lfilter with zi — state persists between calls
+        so sidechain recovery is continuous across bar boundaries).
 
         Returns (ducked_l, ducked_r).
         """
@@ -221,7 +221,9 @@ class Sidechain:
         alpha = 1.0 - np.exp(-1.0 / (self._sr * self._attack_s))
         b_coef = [alpha]
         a_coef = [1.0, -(1.0 - alpha)]
-        kick_env_smooth = lfilter(b_coef, a_coef, kick_env).astype(np.float32)
+        kick_env_smooth, self._env_state = lfilter(
+            b_coef, a_coef, kick_env, zi=self._env_state)
+        kick_env_smooth = kick_env_smooth.astype(np.float32)
 
         # Normalise so peak kick = full ducking depth.
         peak = kick_env_smooth.max()
@@ -230,5 +232,4 @@ class Sidechain:
         gain = (1.0 - self._depth * kick_env_smooth).astype(np.float32)
         out_l = (signal_l * gain).astype(np.float32)
         out_r = (signal_r * gain).astype(np.float32)
-        self._gain_state = float(gain[-1])
         return out_l, out_r

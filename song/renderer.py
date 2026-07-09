@@ -46,6 +46,10 @@ class SongRenderer:
         self._audio_l: list[np.ndarray] = []
         self._audio_r: list[np.ndarray] = []
         self._midi_log: dict[str, list] = {}  # voice → [(bar, step, midi_note, duration_ticks)]
+        # Kick/hihat/clap tails that overflow the current bar's boundary.
+        # Added to the start of the next bar before new hits are placed.
+        self._kick_spill_l: np.ndarray | None = None
+        self._kick_spill_r: np.ndarray | None = None
 
     def render_bars(self, n_bars: int) -> tuple[np.ndarray, np.ndarray]:
         """Render n_bars bars of audio. Returns (buf_l, buf_r) as float32."""
@@ -92,6 +96,19 @@ class SongRenderer:
         kick_buf_r = None
 
         # ── Kick ─────────────────────────────────────────────────────────────
+        # Apply spill from previous bar's kick tails first.
+        if self._kick_spill_l is not None:
+            n_spill = min(len(self._kick_spill_l), spb)
+            mix_l[:n_spill] += self._kick_spill_l[:n_spill]
+            mix_r[:n_spill] += self._kick_spill_r[:n_spill]
+            # Any remaining spill beyond this bar carries forward again.
+            if len(self._kick_spill_l) > spb:
+                self._kick_spill_l = self._kick_spill_l[spb:]
+                self._kick_spill_r = self._kick_spill_r[spb:]
+            else:
+                self._kick_spill_l = None
+                self._kick_spill_r = None
+
         kick_track = self._get_track('kick')
         if kick_track and kick_track.is_active(bar):
             kit = kick_track.instrument
@@ -101,12 +118,33 @@ class SongRenderer:
                 kick_steps = KICK_STEPS_BASIC
 
             kick_l, kick_r = kit.render_kick(gain=GAIN_KICK)
+            new_spill_l = np.zeros(len(kick_l), dtype=np.float32)
+            new_spill_r = np.zeros(len(kick_l), dtype=np.float32)
+
             for step in kick_steps:
-                offset = step * sp16
-                end    = min(offset + len(kick_l), spb)
-                n      = end - offset
-                mix_l[offset:end] += kick_l[:n]
-                mix_r[offset:end] += kick_r[:n]
+                offset  = step * sp16
+                end_bar = min(offset + len(kick_l), spb)
+                n_in    = end_bar - offset
+                mix_l[offset:end_bar] += kick_l[:n_in]
+                mix_r[offset:end_bar] += kick_r[:n_in]
+                # Accumulate tail that overflows the bar boundary.
+                if offset + len(kick_l) > spb:
+                    tail_start = spb - offset
+                    new_spill_l[:len(kick_l) - tail_start] += kick_l[tail_start:]
+                    new_spill_r[:len(kick_l) - tail_start] += kick_r[tail_start:]
+
+            # Merge new spill with any residual spill already in progress.
+            spill_len = int(np.nonzero(new_spill_l)[0][-1] + 1) if np.any(new_spill_l != 0) else 0
+            if spill_len > 0:
+                new_spill_l = new_spill_l[:spill_len]
+                new_spill_r = new_spill_r[:spill_len]
+                if self._kick_spill_l is not None:
+                    n_merge = min(len(self._kick_spill_l), spill_len)
+                    new_spill_l[:n_merge] += self._kick_spill_l[:n_merge]
+                    new_spill_r[:n_merge] += self._kick_spill_r[:n_merge]
+                self._kick_spill_l = new_spill_l
+                self._kick_spill_r = new_spill_r
+
             kick_buf_l = mix_l.copy()  # save for sidechain key signal
             kick_buf_r = mix_r.copy()
 

@@ -43,7 +43,10 @@ class SupersawPad:
         self.detune_cents  = detune_cents
         self.saw_count     = saw_count
         self._fdn          = SimpleFDN(room_size=room_size, sr=sr)
-        self._osc_phases   = None  # shape (n_voices,), initialised on first render
+        self._osc_phases   = None  # shape (n_voices, saw_count), initialised on first render
+        self._samples_rendered = 0  # cumulative sample count for trancegate phase continuity
+        self._lpf_zi_l     = None  # LP filter state persisted across bars
+        self._lpf_zi_r     = None
 
     def render(self, midi_notes: list, n_samples: int,
                bar_offset_samples: int = 0,
@@ -92,8 +95,10 @@ class SupersawPad:
             return buf_l, buf_r
 
         n_voices = len(all_notes)
-        if self._osc_phases is None or len(self._osc_phases) != n_voices:
-            self._osc_phases = np.zeros(n_voices, dtype=np.float64)
+        # Store saw_count phases per voice so all detuned oscillators continue
+        # correctly across bar boundaries (not just the middle voice).
+        if self._osc_phases is None or self._osc_phases.shape != (n_voices, self.saw_count):
+            self._osc_phases = np.zeros((n_voices, self.saw_count), dtype=np.float64)
 
         root_gain = voice_gains[0]  # always 1.0
         for i, (note, vg) in enumerate(zip(all_notes, voice_gains)):
@@ -101,8 +106,8 @@ class SupersawPad:
             l, r, new_phases = supersaw(note, n_samples, self.sr,
                                         saw_count=self.saw_count,
                                         detune_cents=self.detune_cents,
-                                        osc_phases=self._osc_phases[i:i + 1].repeat(self.saw_count))
-            self._osc_phases[i] = new_phases[len(new_phases) // 2]
+                                        osc_phases=self._osc_phases[i])
+            self._osc_phases[i] = new_phases   # store all saw_count phases
             buf_l += l * vg
             buf_r += r * vg
 
@@ -111,14 +116,15 @@ class SupersawPad:
         # 2 octaves (4×) upward on each note trigger, then decays back.
         # lpenv returns values scaled by amount/9.0 (peak ≈ 0.222 for amount=2);
         # normalise to [0,1] by dividing by that scale factor.
+        # Filter state (zi_l/zi_r) is persisted across bars to avoid clicks.
         amount = 2.0
         env = lpenv(n_samples, self.sr, amount=amount, decay_s=0.3)
         env_01_scale = amount / 9.0          # peak value of lpenv output
         base_hz = cutoff                     # resting cutoff = slider value
         peak_hz = cutoff * 4.0              # 2 octaves above base at trigger
         seg_len = n_samples // 8
-        zi_l = None
-        zi_r = None
+        zi_l = self._lpf_zi_l
+        zi_r = self._lpf_zi_r
         for seg in range(8):
             s = seg * seg_len
             e = s + seg_len if seg < 7 else n_samples
@@ -128,13 +134,18 @@ class SupersawPad:
             seg_cutoff = max(50.0, min(seg_cutoff, self.sr * 0.45))
             buf_l[s:e], zi_l = lpf(buf_l[s:e], seg_cutoff, self.sr, zi_l)
             buf_r[s:e], zi_r = lpf(buf_r[s:e], seg_cutoff, self.sr, zi_r)
+        self._lpf_zi_l = zi_l
+        self._lpf_zi_r = zi_r
 
-        # Trancegate
+        # Trancegate — use cumulative sample count for phase continuity across bars.
+        # bar_offset_samples is used for intra-bar step onsets (lead per-step rendering);
+        # for bar-by-bar pad rendering, _samples_rendered tracks the global phase.
         gate = trancegate(n_samples, self.sr, spb,
-                          bar_offset_samples=bar_offset_samples,
+                          bar_offset_samples=self._samples_rendered + bar_offset_samples,
                           speed=TRANCEGATE_SPEED, amount=TRANCEGATE_AMOUNT)
         buf_l *= gate
         buf_r *= gate
+        self._samples_rendered += n_samples
 
         # FDN reverb
         buf_l, buf_r = self._fdn.process(buf_l, buf_r)
