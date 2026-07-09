@@ -227,10 +227,8 @@ class Visualiser:
         """Advance CA, record history, re-render the full display in place."""
         cols, rows = shutil.get_terminal_size((80, 24))
         wide   = cols >= 100
-        # CA width = usable inner width minus label overhead ("  Rule 30" = 9, "  R30" = 5)
-        label_len = 9 if wide else 5
-        ca_inner  = (cols - 4) - label_len   # inner = cols-4; minus label
-        ca_w      = max(8, ca_inner)
+        # CA width = full usable inner width (label is overlaid, not appended)
+        ca_w = max(8, cols - 4)
 
         # Resize CA array when terminal width changes, carrying live state across.
         if ca_w != self._ca_width:
@@ -365,11 +363,13 @@ class Visualiser:
             gate_row = f'Gate   {_DIM}{gate_str}{_RESET}'
 
         # ── CA spacetime diagram ──────────────────────────────────────
-        # One terminal character per CA cell at the current terminal width.
-        # History rows may be narrower/wider than ca_inner if the terminal
-        # was resized mid-session — crop or pad each stored row to fit.
-        ca_label   = '  Rule 30' if wide else '  R30'
-        ca_inner   = inner - len(ca_label)   # characters available for CA cells
+        # One terminal character per CA cell — uses the full inner width.
+        # "Rule 30" is overlaid on the rightmost chars of the newest row
+        # rather than appended, so cells go edge-to-edge.
+        ca_inner  = inner   # full inner width; same 1-char left margin as other rows
+
+        label_txt   = 'Rule 30'   # 7 chars
+        label_start = ca_inner - len(label_txt)
 
         history_slice = list(self._ca_history)[-ca_lines:]
         blank_row_str = f'{_DIM}{"░" * ca_inner}{_RESET}'
@@ -377,19 +377,24 @@ class Visualiser:
 
         ca_rendered = []
         for i, (ca_row, fslider) in enumerate(history_slice):
-            age = len(history_slice) - i          # 1 = newest
+            age      = len(history_slice) - i   # 1 = newest
             ca_color = _YELLOW if fslider > 0.6 else _CYAN
             prefix   = '' if age == 1 else _DIM
 
-            # Build cell string — 1 char per cell, then fit to ca_inner
+            # Build cell string — 1 char per cell, fit to ca_inner
             raw = ''.join('█' if c else '░' for c in ca_row)
             if len(raw) < ca_inner:
-                raw = raw + '░' * (ca_inner - len(raw))   # pad narrow rows
+                raw = raw + '░' * (ca_inner - len(raw))
             else:
-                raw = raw[:ca_inner]                       # crop wide rows
+                raw = raw[:ca_inner]
 
-            label = ca_label if age == 1 else ' ' * len(ca_label)
-            ca_rendered.append(row(f'{prefix}{ca_color}{raw}{_RESET}{label}'))
+            if age == 1:
+                # Overlay label on rightmost chars of the newest row
+                content = (f'{ca_color}{raw[:label_start]}{_RESET}'
+                           f'{_DIM}{label_txt}{_RESET}')
+            else:
+                content = f'{prefix}{ca_color}{raw}{_RESET}'
+            ca_rendered.append(row(content))
 
         # ── Assemble ──────────────────────────────────────────────────
         bottom = f'{_BL}{_H * (cols - 2)}{_BR}'
