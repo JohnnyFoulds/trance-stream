@@ -112,9 +112,9 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
     stage_bars = {k: jitter(v, i) for i, (k, v) in enumerate(stage_items)}
     stage_bars['kick_on'] = 0
     prev = 0
-    for key in ['kick_on', 'pad_root_on', 'lead_root_on', 'lead_melody_on',
-                'pad_chord_on', 'lead_voicing_on', 'clap_on', 'fm_on',
-                'pulse_on', 'hihat_on', 'kick_syncopated']:
+    for key in ['kick_on', 'pad_root_on', 'bass_on', 'lead_root_on',
+                'lead_melody_on', 'pad_chord_on', 'lead_voicing_on', 'clap_on',
+                'fm_on', 'pulse_on', 'hihat_on', 'kick_syncopated']:
         if key in stage_bars:
             stage_bars[key] = max(stage_bars[key], prev + (1 if prev > 0 else 0))
             prev = stage_bars[key]
@@ -165,9 +165,9 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
                 stage_bars[key] = max(1, int(round(stage_bars[key] * _arc_scale)))
         # Re-enforce monotonic ordering after scaling
         prev = 0
-        for key in ['kick_on', 'pad_root_on', 'lead_root_on', 'lead_melody_on',
-                    'pad_chord_on', 'lead_voicing_on', 'clap_on', 'fm_on',
-                    'pulse_on', 'hihat_on', 'kick_syncopated']:
+        for key in ['kick_on', 'pad_root_on', 'bass_on', 'lead_root_on',
+                    'lead_melody_on', 'pad_chord_on', 'lead_voicing_on', 'clap_on',
+                    'fm_on', 'pulse_on', 'hihat_on', 'kick_syncopated']:
             if key in stage_bars:
                 stage_bars[key] = max(stage_bars[key], prev + (1 if prev > 0 else 0))
                 prev = stage_bars[key]
@@ -264,6 +264,19 @@ def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
                 'cutoff_slider': filter_cutoff_arc(bar, filter_pb_bar),
                 'fm_depth': fm_depth_arc(bar),
             },
+        ))
+    except ImportError:
+        pass
+
+    # Bass
+    try:
+        from instruments.bass import AcidBass
+        bass = AcidBass(sr=sr)
+        tracks.append(Track(
+            instrument=bass,
+            instrument_type='bass',
+            active_from_bar=stage_bars.get('bass_on', 4),
+            gain_target=GAIN_BASS,
         ))
     except ImportError:
         pass

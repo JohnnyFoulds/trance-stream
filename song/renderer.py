@@ -161,18 +161,46 @@ class SongRenderer:
             mix_l += pad_l
             mix_r += pad_r
 
+        # ── Bass ─────────────────────────────────────────────────────────────
+        bass_track = self._get_track('bass')
+        if bass_track and bass_track.is_active(bar):
+            # Play root of current chord, one octave below the pad root.
+            # Chord changes every cycle; bass follows root movement.
+            bass_midi = chord_midi[0] - 12
+            bass_midi = max(24, min(60, bass_midi))  # keep in audible bass range
+            kwargs = bass_track.render_kwargs(bar)
+            bass_l, bass_r = bass_track.instrument.render(bass_midi, spb, **kwargs)
+            if kick_buf_l is not None:
+                bass_l, bass_r = self._sidechain.process(bass_l, bass_r, kick_buf_l)
+            mix_l += bass_l
+            mix_r += bass_r
+
         # ── Lead ─────────────────────────────────────────────────────────────
         lead_track = self._get_track('lead')
         if lead_track and lead_track.is_active(bar):
-            if bar >= sb.get('lead_melody_on', 9999):
-                # Full notearp melody
-                pattern     = notearp_pattern(chord_midi)
-                lead_notes  = list(dict.fromkeys(pattern.notes)) if pattern.notes else [song.root_midi]
-            else:
-                lead_notes = [song.root_midi]
             kwargs = lead_track.render_kwargs(bar)
-            lead_l, lead_r = lead_track.instrument.render(
-                lead_notes, spb, **kwargs)
+            if bar >= sb.get('lead_melody_on', 9999):
+                # Per-step rendering: each notearp step fires a fresh acidenv.
+                # Each step renders for a bounded duration (4 sixteenth notes) so
+                # delay tails don't accumulate across all steps in the bar.
+                pattern = notearp_pattern(chord_midi)
+                lead_l_bar = np.zeros(spb, dtype=np.float32)
+                lead_r_bar = np.zeros(spb, dtype=np.float32)
+                step_dur = sp16 * 4        # acidenv dies in ~80-150ms; 4 16ths ≈ 4×4725 = 18900 samples
+                for step, note in zip(pattern.steps, pattern.notes):
+                    onset = step * sp16
+                    if onset >= spb:
+                        continue
+                    n_step = min(step_dur, spb - onset)
+                    sl, sr_ = lead_track.instrument.render(
+                        [note], n_step, bar_offset_samples=onset, **kwargs)
+                    lead_l_bar[onset:onset + n_step] += sl
+                    lead_r_bar[onset:onset + n_step] += sr_
+                lead_l, lead_r = lead_l_bar, lead_r_bar
+            else:
+                # Root note only: single render for whole bar
+                lead_l, lead_r = lead_track.instrument.render(
+                    [song.root_midi], spb, **kwargs)
             if kick_buf_l is not None:
                 lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
             mix_l += lead_l

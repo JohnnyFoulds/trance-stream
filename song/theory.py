@@ -124,13 +124,15 @@ SIDECHAIN_ATTACK_S = 0.16   # recovery time constant (exponential)
 # ---------------------------------------------------------------------------
 
 # Source: docs/music_theory/02_sa_vocabulary_codified.md §7
-# Confirmed from OCR of SA's sessions
-GAIN_KICK  = 1.00   # .gain(1)
-GAIN_PAD   = 0.50   # .pg(.5)
-GAIN_LEAD  = 0.70   # .pg(.7)
-GAIN_BASS  = 0.55
-GAIN_HIHAT = 0.50   # .gain(.5)
-GAIN_CLAP  = 0.70   # .pg(.7)
+# SA's OCR values are Strudel gain multipliers — our synthesizer outputs at a
+# different amplitude than SA's SuperDirt sampler, so we scale up melodic
+# instruments so they're audible against the kick. Kick stays at 1.0.
+GAIN_KICK  = 1.00   # .gain(1) — SA's confirmed value, unchanged
+GAIN_PAD   = 1.50   # scaled: our supersaw outputs ~3× quieter than SA's sampler
+GAIN_LEAD  = 0.90   # balanced: lead audible but doesn't overload brightness
+GAIN_BASS  = 1.20   # scaled: bass needs presence in the mix
+GAIN_HIHAT = 0.50   # .gain(.5) — SA confirmed
+GAIN_CLAP  = 0.70   # .pg(.7) — SA confirmed
 GAIN_PULSE = 0.12
 
 # ---------------------------------------------------------------------------
@@ -142,13 +144,14 @@ GAIN_PULSE = 0.12
 STAGE_BARS_DEFAULT = {
     'kick_on':         0,
     'pad_root_on':     2,
+    'bass_on':         4,    # acid bass enters early — the harmonic spine
     'lead_root_on':    8,
-    'lead_melody_on':  24,
-    'pad_chord_on':    40,
-    'lead_voicing_on': 48,
-    'clap_on':         72,
-    'fm_on':           96,
-    'pulse_on':        108,
+    'lead_melody_on':  16,
+    'pad_chord_on':    20,
+    'lead_voicing_on': 32,
+    'clap_on':         56,
+    'fm_on':           88,
+    'pulse_on':        100,
     'hihat_on':        112,
     'kick_syncopated': 116,
 }
