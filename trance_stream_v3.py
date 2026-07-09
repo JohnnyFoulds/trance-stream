@@ -316,6 +316,10 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
             stream.write(stereo)
             if viz:
                 viz.update(_make_bar_info(bar_idx, renderer.song, render_ms, bar_dur_ms))
+                renderer.ca_state = {
+                    'density':        viz.ca_density(),
+                    'voicing_offset': viz.ca_voicing_offset(),
+                }
             else:
                 print(f"  bar {bar_idx + 1:4d}/{bars_label}  render={render_ms:.0f}ms  "
                       f"budget={bar_dur_ms:.0f}ms  "

@@ -285,6 +285,30 @@ class Visualiser:
         # Don't add trailing newline — keep cursor inside the box.
         sys.stdout.flush()
 
+    def ca_density(self) -> float:
+        """Fraction of live (1) cells in the current CA row. 0.0–1.0.
+
+        Used by the renderer to drive delay wet: dense CA = more wash.
+        Returns 0.5 before any bars have been processed.
+        """
+        if len(self._ca) == 0:
+            return 0.5
+        return float(np.mean(self._ca))
+
+    def ca_voicing_offset(self) -> int:
+        """Semitone offset for the lead derived from two centre CA bits.
+
+        Reads bits at positions ca_width//2 and ca_width//2+1 to form a
+        2-bit index into (0, 2, 5, 7) — SA's confirmed voicing offsets.
+        Returns 0 before any bars have been processed.
+        """
+        _OFFSETS = (0, 2, 5, 7)
+        if len(self._ca) < 2:
+            return 0
+        mid = len(self._ca) // 2
+        idx = (int(self._ca[mid]) << 1) | int(self._ca[mid + 1])
+        return _OFFSETS[idx]
+
     # ------------------------------------------------------------------
     # Unified renderer — wide and narrow share the same structure,
     # differing only in label verbosity and whether timing row appears.

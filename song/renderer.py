@@ -51,6 +51,9 @@ class SongRenderer:
         # Added to the start of the next bar before new hits are placed.
         self._kick_spill_l: np.ndarray | None = None
         self._kick_spill_r: np.ndarray | None = None
+        # CA state injected by the stream loop each bar (optional).
+        # Keys: 'density' (float 0–1), 'voicing_offset' (int semitones).
+        self.ca_state: dict = {}
 
     def render_bars(self, n_bars: int) -> tuple[np.ndarray, np.ndarray]:
         """Render n_bars bars of audio. Returns (buf_l, buf_r) as float32."""
@@ -209,8 +212,13 @@ class SongRenderer:
         bass_track = self._get_track('bass')
         if bass_track and bass_track.is_active(bar):
             from song.theory import BASS_STEPS_A, BASS_STEPS_B, GAIN_BASS
-            # SA's bstruct: two alternating step patterns, bars alternate A/B.
-            bass_steps = BASS_STEPS_A if bar % 2 == 0 else BASS_STEPS_B
+            # CA density above 0.55 → denser step pattern (more hits per bar).
+            # Below that threshold alternate A/B as before.
+            ca_density = self.ca_state.get('density', 0.5)
+            if ca_density > 0.55:
+                bass_steps = BASS_STEPS_B
+            else:
+                bass_steps = BASS_STEPS_A if bar % 2 == 0 else BASS_STEPS_B
             bass_midi = chord_midi[0] - 12
             bass_midi = max(24, min(60, bass_midi))
             kwargs = bass_track.render_kwargs(bar)
@@ -248,8 +256,22 @@ class SongRenderer:
             # This matches SA's .add 14 in a 7-note scale: +14 scale steps = +24 semitones
             # = two octaves, placing the lead in C5-F5 (~523-698 Hz) where it cuts above
             # the pad without clashing.
-            lead_chord_midi = [m + 24 for m in chord_midi]
-            lead_root_midi  = song.root_midi + 24
+            #
+            # CA voicing offset — SA's .add "<5 4 0 <0 2>>" equivalent.
+            # Two centre CA bits pick from (0, 2, 5, 7) semitones added to all lead notes,
+            # creating non-repeating harmonic colour shifts without changing the chord.
+            # Only applied once the lead melody has started to avoid shifting the root drone.
+            ca_vo = self.ca_state.get('voicing_offset', 0)
+            if bar >= sb.get('lead_melody_on', 9999):
+                lead_chord_midi = [m + 24 + ca_vo for m in chord_midi]
+                lead_root_midi  = song.root_midi + 24 + ca_vo
+            else:
+                lead_chord_midi = [m + 24 for m in chord_midi]
+                lead_root_midi  = song.root_midi + 24
+
+            # CA density drives delay wet: dense CA = more wash (0.25–0.85).
+            ca_density = self.ca_state.get('density', 0.5)
+            lead_track.instrument._delay._wet = 0.25 + ca_density * 0.6
 
             if bar >= sb.get('lead_melody_on', 9999):
                 # SA's melody: two sparse notes per bar (steps 4 and 10),
