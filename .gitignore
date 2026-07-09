@@ -21,3 +21,6 @@ research/reference_audio/stems/*/
 
 # Virtual environment
 .venv/
+
+# ASCII video frame files — large pre-rendered assets, not committed
+tools/*_frames.txt

@@ -55,6 +55,14 @@ python trance_stream_v3.py [OPTIONS]
                         and a Rule-30 cellular automaton spacetime diagram.
                         Only valid with --stream.
 
+      --ascii-video PATH  Load a pre-rendered ASCII video frame file and use it
+                        as a colour overlay on the CA diagram. The CA continues
+                        running; the video colours each cell. Press v to toggle
+                        the overlay on/off while streaming.
+                        If PATH is omitted the default asset is used when present
+                        (tools/bad_apple_frames.txt — see below).
+                        Only active with --stream --viz.
+
       --wav PATH        Write output to a WAV file (default when not streaming:
                         /tmp/trance_v3.wav)
 
@@ -200,6 +208,34 @@ never stalls between bars.
 ```bash
 python trance_stream_v3.py --stream --viz --seed dawn --mood uplifting
 ```
+
+### ASCII video overlay
+
+The CA diagram has a second display mode where a pre-rendered ASCII video file
+is used as a colour overlay. The CA keeps scrolling and driving the music;
+the video frame at each moment determines the colour of each cell.
+
+```bash
+# Download the Bad Apple frame file (one-off, ~13 MB)
+python tools/fetch_bad_apple.py
+
+# Stream with overlay active from the start
+python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt
+
+# Or just run --viz — the overlay loads automatically if the default file is present
+python trance_stream_v3.py --stream --viz
+```
+
+Press **`v`** while streaming to toggle the overlay on and off.
+
+The overlay uses cover scaling: the video always fills the entire CA area with
+no letterbox bars. The video is center-cropped to fit the terminal shape.
+Playback is wall-clock synced at the video's native frame rate (30 fps for
+Bad Apple), advancing smoothly on every sixteenth-note tick regardless of BPM.
+
+Any conforming frame file works — the format is one frame per line with rows
+separated by literal `\n` (the backslashxx/bad-apple-ascii format). The frame
+rate is parsed from the filename pattern `*_30fps_*`; defaults to 30 if absent.
 
 Renders a full-screen text display that updates once per bar. Layout
 adapts to terminal width: wide (≥ 100 cols) shows full labels and timing

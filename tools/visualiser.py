@@ -21,9 +21,14 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
+import select
 import shutil
 import sys
+import termios
+import time
+import tty
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
@@ -211,7 +216,12 @@ class Visualiser:
     stop() on exit to restore the terminal.
     """
 
-    def __init__(self, song, n_bars: Optional[int] = None):
+    # Default path checked automatically when no --ascii-video is given.
+    DEFAULT_ASCII_VIDEO = os.path.join(os.path.dirname(__file__), 'bad_apple_frames.txt')
+
+    def __init__(self, song, n_bars: Optional[int] = None,
+                 ascii_video_frames=None, ascii_video_fps: int = 30,
+                 ascii_video_width: int = 60, ascii_video_height: int = 32):
         self.song   = song
         self.n_bars = n_bars
         # CA width adapts to terminal width — initialised on first update().
@@ -225,7 +235,47 @@ class Visualiser:
         self._ca_history: deque = deque(maxlen=200)
         self._last_info: Optional[BarInfo] = None
 
+        # ASCII video overlay state
+        self._ascii_video_frames = ascii_video_frames
+        self._ascii_video_fps    = ascii_video_fps
+        self._ascii_video_width  = ascii_video_width
+        self._ascii_video_height = ascii_video_height
+        self._ascii_video_mode   = False
+        self._ascii_video_frame_idx = 0
+        self._ascii_video_start_time: Optional[float] = None
+
+        # stdin state for keybind (set up in start())
+        self._stdin_fd: Optional[int] = None
+        self._old_termios = None
+
     def start(self) -> None:
+        # Enter cbreak mode so keypresses are available without Enter.
+        # Only affects stdin input flags — stdout ANSI output is unaffected.
+        try:
+            fd = sys.stdin.fileno()
+            self._old_termios = termios.tcgetattr(fd)
+            attr = termios.tcgetattr(fd)
+            attr[tty.LFLAG] = attr[tty.LFLAG] & ~(termios.ECHO | termios.ICANON)
+            attr[tty.CC][termios.VMIN]  = 1
+            attr[tty.CC][termios.VTIME] = 0
+            termios.tcsetattr(fd, termios.TCSANOW, attr)
+            self._stdin_fd = fd
+        except Exception:
+            self._stdin_fd = None
+
+        # Auto-load default video if none was provided explicitly
+        if self._ascii_video_frames is None and os.path.exists(self.DEFAULT_ASCII_VIDEO):
+            try:
+                sys.path.insert(0, os.path.dirname(__file__))
+                from ascii_video import load_frames
+                frames, fps, w, h = load_frames(self.DEFAULT_ASCII_VIDEO)
+                self._ascii_video_frames = frames
+                self._ascii_video_fps    = fps
+                self._ascii_video_width  = w
+                self._ascii_video_height = h
+            except Exception:
+                pass
+
         sys.stdout.write(_HIDE_CURSOR + _CLEAR + _HOME)
         sys.stdout.flush()
 
@@ -234,21 +284,47 @@ class Visualiser:
         # Place cursor well below the last line we wrote and restore terminal.
         sys.stdout.write(f'\033[{rows};0H' + _SHOW_CURSOR + _RESET + '\n')
         sys.stdout.flush()
+        # Restore terminal input settings
+        if self._old_termios is not None and self._stdin_fd is not None:
+            try:
+                termios.tcsetattr(self._stdin_fd, termios.TCSAFLUSH, self._old_termios)
+            except Exception:
+                pass
 
     def tick(self, hit_map: dict) -> None:
-        """Overwrite the track indicator line in-place for sub-bar flicker.
+        """Sub-bar update called 16 times per bar.
 
-        hit_map  — dict mapping track name to True (hit this step) or False.
-        Active tracks that are hit this step show bright green ●.
-        Active tracks not hit show dim green ●.
-        Inactive tracks show dim ○ regardless.
+        In overlay mode: full-frame redraw with the video frame advanced by
+        wall-clock time, giving smooth video playback at ~16 fps within each bar.
 
-        Uses absolute cursor positioning so only the one line is redrawn —
-        no full-frame refresh, no flicker in the rest of the display.
+        In default mode: overwrite only the track indicator line in-place
+        (no full-frame refresh, no flicker).
         """
         if not self._last_info:
             return
         info = self._last_info
+
+        self._poll_keys()
+
+        if self._ascii_video_mode and self._ascii_video_frames:
+            # Advance frame index by wall clock then do a full redraw
+            now = time.monotonic()
+            if self._ascii_video_start_time is None:
+                self._ascii_video_start_time = now
+            elapsed = now - self._ascii_video_start_time
+            self._ascii_video_frame_idx = (
+                round(elapsed * self._ascii_video_fps) % len(self._ascii_video_frames)
+            )
+            cols, rows = shutil.get_terminal_size((80, 24))
+            wide = cols >= 100
+            fixed = _FIXED_LINES_WIDE if wide else _FIXED_LINES_NARROW
+            ca_lines = max(1, rows - fixed)
+            lines = self._render(info, cols, rows, wide, ca_lines)
+            sys.stdout.write(_HOME)
+            sys.stdout.write('\n'.join(lines))
+            sys.stdout.flush()
+            return
+
         cols, _ = shutil.get_terminal_size((80, 24))
         wide = cols >= 100
         inner = cols - 6
@@ -293,8 +369,20 @@ class Visualiser:
         sys.stdout.write(f'\033[{_TRACKS_ROW};1H{line}')
         sys.stdout.flush()
 
+    def _poll_keys(self) -> None:
+        if self._stdin_fd is None:
+            return
+        if select.select([sys.stdin], [], [], 0)[0]:
+            chunk = os.read(self._stdin_fd, 256)
+            if b'v' in chunk:
+                if self._ascii_video_frames is not None:
+                    self._ascii_video_mode = not self._ascii_video_mode
+                    if self._ascii_video_mode:
+                        self._ascii_video_start_time = time.monotonic()
+
     def update(self, info: BarInfo) -> None:
         """Advance CA, record history, re-render the full display in place."""
+        self._poll_keys()
         cols, rows = shutil.get_terminal_size((80, 24))
         wide   = cols >= 100
         # CA width = full usable inner width (label is overlaid, not appended)
@@ -459,39 +547,68 @@ class Visualiser:
             gate_row = f'Gate   {_DIM}{gate_str}{_RESET}'
 
         # ── CA spacetime diagram ──────────────────────────────────────
-        # Colour scheme: hue = chord index (4-colour palette), brightness
-        # = filter arc tier (dim/normal/bold). This encodes both harmonic
-        # state and session energy in the visual texture.
-        #
-        # "Rule 30" sits in the right-margin padding of the newest row —
-        # written as dim reversed text so it reads as ambient metadata
-        # without displacing any CA cells.
         ca_inner = inner   # cells fill the full inner width
-
-        # Label lives in the padding zone between content and right ║.
-        # row() pads content to inner width — we write label into that
-        # padding by appending it after the cell string and measuring.
         label_txt = 'Rule 30'
 
         history_slice = list(self._ca_history)[-ca_lines:]
         pad_count     = ca_lines - len(history_slice)
         blank_row_str = f'{_DIM}{"░" * ca_inner}{_RESET}'
 
+        # ASCII video overlay: grab current frame once for the whole render
+        av_frame = None
+        av_row_src_start = av_col_src_start = 0.0
+        av_scaled_w = av_scaled_h = 1
+        if self._ascii_video_mode and self._ascii_video_frames:
+            av_frame = self._ascii_video_frames[self._ascii_video_frame_idx]
+
+            av_w = self._ascii_video_width
+            av_h = self._ascii_video_height
+
+            # Cover mode: always fill the entire CA area, center-crop excess.
+            # No bars ever — every cell gets a video color. This is correct for
+            # an overlay texture: bars (uncovered cells) look worse than a crop.
+            # Cell ratio 0.5 cancels identically in both axes, so we work in
+            # plain char-count space: scale = max(ca_inner/src_w, ca_lines/src_h).
+            scale = max(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
+
+            av_scaled_w = max(ca_inner, int(av_w * scale))
+            av_scaled_h = max(ca_lines, int(av_h * scale))
+
+            # Center-crop offsets (into the scaled source)
+            av_col_src_start = (av_scaled_w - ca_inner) / 2.0
+            av_row_src_start = (av_scaled_h - ca_lines) / 2.0
+
+        def _av_colored_row(raw: str, display_row: int) -> str:
+            """Color every cell in a CA row using the current video frame."""
+            src_r = display_row + av_row_src_start
+            src_row_idx = min(int(src_r / av_scaled_h * self._ascii_video_height),
+                              self._ascii_video_height - 1)
+            src_line = av_frame[src_row_idx] if src_row_idx < len(av_frame) else ''
+            chars = []
+            for col_idx, ch in enumerate(raw):
+                src_c = col_idx + av_col_src_start
+                src_col_idx = min(int(src_c / av_scaled_w * self._ascii_video_width),
+                                  self._ascii_video_width - 1)
+                src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
+                chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
+            return ''.join(chars)
+
         ca_rendered = []
+
+        # Padding rows at top (before history fills up) — still get overlay coloring
+        blank_raw = '░' * ca_inner
+        for pad_i in range(pad_count):
+            display_row = pad_i   # top of the full ca_lines area
+            if av_frame is not None:
+                content = _av_colored_row(blank_raw, display_row)
+            else:
+                content = f'{_DIM}{blank_raw}{_RESET}'
+            ca_rendered.append(row(content))
+
         for i, entry in enumerate(history_slice):
             ca_row, fslider, chord_idx = entry
+            display_row = pad_count + i   # position in the full ca_lines area
             age = len(history_slice) - i   # 1 = newest
-
-            # Hue: chord palette
-            ca_color = _CA_PALETTE[chord_idx % len(_CA_PALETTE)]
-
-            # Brightness: dim early session, normal mid, bold when open
-            if fslider < 0.5:
-                bright = _DIM
-            elif fslider > 0.7:
-                bright = _BOLD
-            else:
-                bright = ''
 
             # Build cell string — 1 char per cell, fit to ca_inner
             raw = ''.join('█' if c else '░' for c in ca_row)
@@ -500,14 +617,24 @@ class Visualiser:
             else:
                 raw = raw[:ca_inner]
 
-            content = f'{bright}{ca_color}{raw}{_RESET}'
+            if av_frame is not None:
+                content = _av_colored_row(raw, display_row)
+            else:
+                # Default mode: hue = chord palette, brightness = filter arc
+                ca_color = _CA_PALETTE[chord_idx % len(_CA_PALETTE)]
+                if fslider < 0.5:
+                    bright = _DIM
+                elif fslider > 0.7:
+                    bright = _BOLD
+                else:
+                    bright = ''
+                content = f'{bright}{ca_color}{raw}{_RESET}'
 
-            if age == 1:
-                # Newest row: trim rightmost cells to make room for the
-                # label. Label is dim — reads as ambient metadata, not
-                # competing with the CA pattern.
-                # Layout: ║(1) + sp(2) + cells(ca_inner - 7) + label(7) + sp(2) + ║(1) = cols
+            if age == 1 and av_frame is None:
+                # Newest row label only in default mode
                 cells_w = ca_inner - len(label_txt)
+                ca_color = _CA_PALETTE[chord_idx % len(_CA_PALETTE)]
+                bright = _DIM if fslider < 0.5 else (_BOLD if fslider > 0.7 else '')
                 ca_rendered.append(
                     f'{_V}  {bright}{ca_color}{raw[:cells_w]}{_RESET}'
                     f'{_DIM}{label_txt}{_RESET}  {_V}'
@@ -530,10 +657,6 @@ class Visualiser:
             row(gate_row),
             divider(),
         ]
-
-        # Blank padding rows (before history fills up)
-        for _ in range(pad_count):
-            out.append(row(blank_row_str))
 
         out.extend(ca_rendered)
 
@@ -571,3 +694,18 @@ def _mini_bar(frac: float, width: int, color: str) -> str:
 def _strip_ansi(s: str) -> str:
     """Remove ANSI escape codes to get the visible character count."""
     return re.sub(r'\033\[[0-9;?]*[a-zA-Z]', '', s)
+
+
+# Characters ordered roughly by visual density (darkest → brightest).
+# Used to map ASCII video source pixels to ANSI brightness in overlay mode.
+_AV_DARK   = set(' .,`\'":;-_')
+_AV_MID    = set('!|/\\()[]{}+~?<>^*')
+_AV_BRIGHT = set('#@%MW&$X08B')
+
+def _av_color(src_ch: str) -> str:
+    """Map an ASCII video source character to an ANSI color code for overlay."""
+    if src_ch in _AV_BRIGHT:
+        return _BOLD + _WHITE
+    if src_ch in _AV_DARK:
+        return _DIM + '\033[34m'   # dim blue — dark regions recede
+    return _CYAN                   # mid chars get cyan

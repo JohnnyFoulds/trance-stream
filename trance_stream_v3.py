@@ -69,6 +69,11 @@ def main():
     parser.add_argument("--viz",     action="store_true",
                         help="Show full-screen text visualiser while streaming. "
                              "Only valid with --stream.")
+    parser.add_argument("--ascii-video", default=None, metavar="PATH",
+                        help="Pre-rendered ASCII video frame file to use as CA color overlay. "
+                             "Press 'v' during streaming to toggle the overlay on/off. "
+                             "If omitted, the default asset (bad_apple_frames.txt) is used "
+                             "when present. Only active with --viz --stream.")
     parser.add_argument("--solo", nargs="+", metavar="TRACK",
                         help="Solo one or more tracks; all others are muted. "
                              "Track names: kick pad lead bass hihat clap pulse")
@@ -120,7 +125,8 @@ def main():
 
     if args.stream:
         buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path,
-                                    use_viz=args.viz)
+                                    use_viz=args.viz,
+                                    ascii_video_path=args.ascii_video)
     else:
         print(f"Rendering {n_bars} bars...")
         buf_l, buf_r = renderer.render_bars(n_bars)
@@ -231,7 +237,8 @@ def main():
 
 
 def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
-                 wav_path: str | None, use_viz: bool = False) -> tuple:
+                 wav_path: str | None, use_viz: bool = False,
+                 ascii_video_path: str | None = None) -> tuple:
     """Render and play back bar-by-bar in real time.
 
     Each bar is rendered (~0.28s at 6× realtime) then written to the audio
@@ -314,7 +321,18 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
         import sys as _sys
         _sys.path.insert(0, str(REPO_ROOT / "tools"))
         from visualiser import Visualiser, make_bar_info as _make_bar_info
-        viz = Visualiser(renderer.song, n_bars)
+
+        av_frames, av_fps, av_w, av_h = None, 30, 60, 32
+        if ascii_video_path:
+            from ascii_video import load_frames as _load_av
+            av_frames, av_fps, av_w, av_h = _load_av(ascii_video_path)
+            print(f"  ASCII video: {len(av_frames)} frames @ {av_fps}fps  ({av_w}×{av_h})")
+
+        viz = Visualiser(renderer.song, n_bars,
+                         ascii_video_frames=av_frames,
+                         ascii_video_fps=av_fps,
+                         ascii_video_width=av_w,
+                         ascii_video_height=av_h)
         viz.start()
     else:
         print(f"Streaming {bars_label} bars in real time — Ctrl-C to stop.")
