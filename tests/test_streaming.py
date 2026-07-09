@@ -242,6 +242,81 @@ def test_stream_wav_matches_batch_wav(tmp_path):
         "Streaming WAV differs from batch WAV (same seed should be identical)"
 
 
+def test_stream_wav_matches_batch_wav_with_volume(tmp_path):
+    """WAV written during streaming at volume=0.7 must match batch WAV at volume=0.7.
+
+    This catches a bug where batch write_wav() ignores volume because it reads
+    from renderer._audio_l (unscaled), while stream WAV writes scaled audio.
+    Both paths must produce the same output.
+    """
+    from trance_stream_v3 import _stream_bars
+    import trance_stream_v3 as v3
+    import wave as _wave
+
+    n_bars = 4
+    volume = 0.7
+
+    # Batch path via main() so volume is applied to _audio_l before write_wav
+    batch_wav = str(tmp_path / "batch_vol.wav")
+    monkeypatch_sys = mock.patch.object(
+        sys, 'argv',
+        ['trance_stream_v3.py', '--bars', str(n_bars), '--seed', 'sunrise',
+         '--volume', str(volume), '--wav', batch_wav]
+    )
+    with monkeypatch_sys:
+        v3.main()
+
+    # Stream path
+    renderer_s, _ = _make_renderer('sunrise', n_bars=n_bars)
+    stream_wav = str(tmp_path / "stream_vol.wav")
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer_s, n_bars, volume=volume, wav_path=stream_wav)
+
+    with _wave.open(batch_wav) as wf:
+        batch_pcm = wf.readframes(wf.getnframes())
+    with _wave.open(stream_wav) as wf:
+        stream_pcm = wf.readframes(wf.getnframes())
+
+    assert batch_pcm == stream_pcm, (
+        "Batch WAV and stream WAV differ at volume != 1.0. "
+        "write_wav() must use the volume-scaled audio."
+    )
+
+
+def test_stream_blocks_sent_to_device_match_wav(tmp_path):
+    """Audio blocks sent to the sound device must be identical to what's in the WAV.
+
+    The device gets float32 stereo; the WAV gets int16 stereo from the same data.
+    Reconstructing float32 from the WAV PCM must match the device blocks.
+    """
+    from trance_stream_v3 import _stream_bars
+    import wave as _wave
+
+    n_bars = 3
+    wav_path = str(tmp_path / "device_vs_wav.wav")
+    renderer, _ = _make_renderer('sunrise', n_bars=n_bars)
+    fake_stream = _FakeStream()
+    with mock.patch.dict('sys.modules', {'sounddevice': _mock_sd(fake_stream)}):
+        _stream_bars(renderer, n_bars, volume=1.0, wav_path=wav_path)
+
+    # Reconstruct from WAV
+    with _wave.open(wav_path) as wf:
+        raw = wf.readframes(wf.getnframes())
+    pcm = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2).astype(np.float32) / 32767.0
+
+    # Reconstruct from device blocks
+    device = np.concatenate(fake_stream.blocks, axis=0)  # shape (N, 2)
+
+    # PCM quantises to int16, so allow ±1 LSB tolerance
+    tolerance = 1.0 / 32767.0
+    diff = np.abs(pcm - device).max()
+    assert diff <= tolerance, (
+        f"Max difference between device audio and WAV audio: {diff:.6f} "
+        f"(tolerance {tolerance:.6f}). What you hear must equal what's in the WAV."
+    )
+
+
 def test_stream_no_wav_when_no_path(tmp_path):
     """No WAV file must be written when wav_path=None."""
     from trance_stream_v3 import _stream_bars

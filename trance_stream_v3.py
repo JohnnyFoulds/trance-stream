@@ -96,6 +96,9 @@ def main():
         if args.volume != 1.0:
             buf_l *= args.volume
             buf_r *= args.volume
+            # Scale stored bars so write_wav() writes the volume-adjusted audio
+            renderer._audio_l = [b * args.volume for b in renderer._audio_l]
+            renderer._audio_r = [b * args.volume for b in renderer._audio_r]
 
         elapsed = time.time() - t0
         dur_s   = len(buf_l) / song.sr
