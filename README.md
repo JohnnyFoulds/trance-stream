@@ -40,6 +40,16 @@ python trance_stream_v3.py [OPTIONS]
 
       --stream          Real-time bar-by-bar playback, runs forever. Ctrl-C to stop.
 
+      --from-bar BAR    Skip silently to BAR before streaming or rendering.
+                        All instrument state (oscillator phases, filter, sidechain,
+                        chord progression) is advanced correctly. Instantaneous —
+                        useful for jumping to a specific moment for diagnosis.
+
+                        Examples:
+                          --stream --from-bar 90          stream from bar 90
+                          --stream --from-bar 45 --bars 12  hear the breakdown
+                          --stream --from-bar 96 --solo lead  isolate lead at climax
+
       --viz             Full-screen text visualiser while streaming.
                         Shows chord, filter arc, active tracks, trancegate phase,
                         and a Rule-30 cellular automaton spacetime diagram.
@@ -136,9 +146,13 @@ distinct pitches to arpeggiate between.
 
 ## Arrangement
 
-v3 uses an **additive stage model** — voices enter one at a time and stay.
-There is no breakdown or drop (this matches Switch Angel's live-coding
-approach).
+v3 uses an **additive stage model** — voices enter one at a time and then stay. The arrangement has three dynamic phases:
+
+**Build (bars 0 → pullback−4):** voices enter one by one; master gain rises from 0.55 to 1.0, making each new entry feel bigger than the last. Once `pad_chord_on` is reached the pad switches from a sustained drone to 16 rhythmic filter stabs per bar (SA's `.seg 16` equivalent).
+
+**Breakdown (4 bars before pullback):** bass, lead, hihat and clap all drop out simultaneously, leaving only kick + pad. The filter then dips to ~311 Hz over 8 bars — the darkest, most stripped-back moment in the song.
+
+**Second half (after pullback):** all voices re-enter as the filter reopens toward 12 kHz. The chord progression shifts to `chord_prog_b` and the root may lift by +2 semitones (seed-determined). FM modulation and hi-hat enter in the final third.
 
 Default stage positions (shifted ±4 bars per seed):
 
@@ -197,11 +211,23 @@ stats; narrow (< 100 cols) uses compact abbreviations.
 |-------|--------------|
 | Header | Seed, mood, BPM |
 | Info row | Bar number, current chord name, filter cutoff in Hz, FM depth % |
-| Track row | Seven track indicators — `●` (active, green) or `○` (inactive, dim) |
+| Track row | Seven track indicators that flicker in sync with actual hits (see below) |
 | Filter bar | Cyan filled bar tracking the cutoff arc from ~850 Hz to ~12 kHz |
 | Gate bar | `●` cursor showing the trancegate position within the current bar cycle |
 | CA diagram | Rule-30 cellular automaton spacetime history (see below) |
 | Timing row | Render time, bar budget, headroom in ms (wide layout only) |
+
+### Track indicators
+
+Each bar is delivered as 16 sixteenth-note chunks. The indicator line updates on every chunk, flashing in sync with what the listener actually hears.
+
+Percussive voices (kick, bass, hihat, clap) go fully dark between hits — you can read the rhythm pattern directly from the display. Sustained voices (pad, lead, pulse) stay dim `●` while active to show they are droning, flashing bright on each retrigger.
+
+| State | Meaning |
+|-------|---------|
+| Bold bright `●` | Instrument firing this sixteenth note |
+| Dim `●` | Active but not firing (sustained voice) |
+| `○` | Between hits (percussive voice) or not yet in the arrangement |
 
 ### CA diagram — reading the colours
 
@@ -238,6 +264,18 @@ history of the entire stream.
 
 **"Rule 30"** appears as a dim overlay on the rightmost edge of the newest
 row — ambient metadata, not part of the pattern.
+
+### CA → sound (the loop is closed)
+
+The automaton does not just visualise the music — it drives three sound parameters each bar:
+
+| CA property | Sound parameter | Effect |
+|-------------|----------------|--------|
+| Two centre bits → index into `(0, 2, 5, 7)` | Lead voicing offset (semitones) | Melody shifts register each bar — SA's `.add "<5 4 0 <0 2>>"` equivalent |
+| Cell density (fraction of live cells) | Lead delay wet `0.25–0.85` | Dense rows = washed/spacious; sparse rows = dry/tight |
+| Cell density > 0.55 | Bass step pattern | Busier pattern when CA is active; sparser when quiet |
+
+Musical events inject bits back into the CA: chord changes force bit 0 to 1; FM onset forces the centre bit; every 4-bar phrase boundary toggles a near-centre bit. This creates a feedback loop where harmony drives pattern which drives timbre which drives variation.
 
 ---
 
