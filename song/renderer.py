@@ -307,7 +307,17 @@ class SongRenderer:
             # Two centre CA bits pick from (0, 2, 5, 7) semitones added to all lead notes,
             # creating non-repeating harmonic colour shifts without changing the chord.
             # Only applied once the lead melody has started to avoid shifting the root drone.
-            ca_vo = self.ca_state.get('voicing_offset', 0)
+            # Voicing offset: from CA if viz is active, else from seed-derived
+            # pseudo-random sequence so it's always non-zero and non-repeating.
+            _OFFSETS = (0, 2, 5, 7)
+            if 'voicing_offset' in self.ca_state:
+                ca_vo = self.ca_state['voicing_offset']
+            else:
+                # LFSR-style: hash(seed + bar) gives non-repeating, deterministic
+                # variation without needing the full CA.
+                _h = hash((song.seed, bar)) & 0xFF
+                ca_vo = _OFFSETS[_h % len(_OFFSETS)]
+
             if bar >= sb.get('lead_melody_on', 9999):
                 lead_chord_midi = [m + 24 + ca_vo for m in chord_midi]
                 lead_root_midi  = song.root_midi + 24 + ca_vo
@@ -316,7 +326,12 @@ class SongRenderer:
                 lead_root_midi  = song.root_midi + 24
 
             # CA density drives delay wet: dense CA = more wash (0.25–0.85).
-            ca_density = self.ca_state.get('density', 0.5)
+            # Falls back to seed+bar derived value without viz.
+            if 'density' in self.ca_state:
+                ca_density = self.ca_state['density']
+            else:
+                _h2 = hash((song.seed, bar + 1)) & 0xFF
+                ca_density = 0.3 + (_h2 / 255.0) * 0.5   # 0.3–0.8 range
             lead_track.instrument._delay._wet = 0.25 + ca_density * 0.6
 
             if bar >= sb.get('lead_melody_on', 9999):
