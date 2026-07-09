@@ -16,7 +16,7 @@ pip install numpy scipy sounddevice mido
 python trance_stream_v3.py --stream
 ```
 
-Plays 128 bars at 140 BPM. Press Ctrl+C to stop.
+Streams indefinitely until Ctrl-C. Add `--bars N` to stop after N bars.
 
 ---
 
@@ -33,11 +33,12 @@ python trance_stream_v3.py [OPTIONS]
 
       --bpm BPM         Tempo in BPM (default: 140)
 
-      --bars N          Number of bars to generate (default: 128)
+      --bars N          Number of bars to generate (default: infinite when
+                        streaming, 128 when rendering to file)
 
       --volume V        Master volume 0.0–1.0 (default: 1.0)
 
-      --stream          Real-time bar-by-bar playback. Ctrl-C to stop.
+      --stream          Real-time bar-by-bar playback, runs forever. Ctrl-C to stop.
 
       --wav PATH        Write output to a WAV file (default when not streaming:
                         /tmp/trance_v3.wav)
@@ -157,17 +158,21 @@ Default stage positions (shifted ±4 bars per seed):
 
 | Voice | Signal chain |
 |-------|-------------|
-| **Kick** | Sine sweep + noise transient, 400 ms tail |
-| **Pad** | 5-voice supersaw → LP envelope → trancegate (1.5×) → FDN reverb → sidechain |
-| **Bass** | Sawtooth → acidenv LP sweep → LPF; fires per step from SA's bstruct rhythm |
-| **Lead** | 3-voice supersaw + FM → acidenv LP sweep → trancegate → ping-pong delay |
+| **Kick** | Sine sweep + noise transient, tail bleeds into next bar |
+| **Pad** | 5-voice supersaw → LP swell (lpenv) → trancegate (1.5×, depth 0.7, breathes 0.3–1.0) → FDN reverb → sidechain; plays in C4 register |
+| **Bass** | Sawtooth → acidenv LP sweep → LPF; 5–7 spaced hits per bar with clear gaps |
+| **Lead** | 3-voice supersaw + FM → acidenv LP sweep → trancegate → ping-pong delay; plays in C5 register, one octave above pad |
 | **Hi-hat** | White noise → HPF → exponential decay; tri-LFO varies decay |
 | **Clap** | Filtered noise burst, backbeat (steps 4, 12) |
 | **Pulse** | Pulse oscillator × 16 triggers per bar, FM-modulated by time |
 
-All oscillators maintain phase continuity across bar boundaries (no click
-artefacts at transitions). Kick tails overflow into the next bar. Sidechain
-uses a stateful IIR follower so ducking recovers smoothly across bars.
+All oscillators maintain phase continuity across bar boundaries. Kick tails
+overflow into the next bar. Trancegate phase is anchored to absolute session
+time so instruments entering mid-song breathe in sync with the kick.
+Sidechain uses a stateful IIR follower so ducking recovers smoothly across bars.
+
+Stream uses a dedicated render thread feeding a queue so the audio thread
+never stalls between bars.
 
 ---
 
@@ -177,8 +182,8 @@ uses a stateful IIR follower so ducking recovers smoothly across bars.
 # Render 128 bars to WAV only (no audio hardware needed)
 python trance_stream_v3.py --bars 128 --wav out.wav -s "sunrise"
 
-# Stream and write WAV simultaneously
-python trance_stream_v3.py --stream --bars 128 --wav out.wav -s "sunrise"
+# Stream forever and write WAV simultaneously (Ctrl-C to stop and finalise)
+python trance_stream_v3.py --stream --wav out.wav -s "sunrise"
 
 # Write MIDI
 python trance_stream_v3.py --bars 64 --wav out.wav -o out.mid -s "sunrise"
