@@ -45,8 +45,8 @@ def main():
                         help="Mood/style (default: uplifting)")
     parser.add_argument("--bpm",     type=float, default=140.0,
                         help="Tempo in BPM (default: 140)")
-    parser.add_argument("--bars",    type=int,   default=128,
-                        help="Number of bars to render (default: 128)")
+    parser.add_argument("--bars",    type=int,   default=None,
+                        help="Number of bars to render (default: infinite when streaming, 128 otherwise)")
     parser.add_argument("--wav",     default=None,
                         help="Output WAV path (default: /tmp/trance_v3.wav when not streaming)")
     parser.add_argument("--out-midi", "-o", default=None,
@@ -70,15 +70,16 @@ def main():
                              "Track names: kick pad lead bass hihat clap pulse")
     args = parser.parse_args()
 
+    n_bars = args.bars if args.bars is not None else (None if args.stream else 128)
     print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
-          f"bpm={args.bpm}  bars={args.bars}")
+          f"bpm={args.bpm}  bars={'∞' if n_bars is None else n_bars}")
 
     # Build song
     print("Building song...")
     t0 = time.time()
     from song.builder import build_song
     song = build_song(args.seed, mood=args.mood, bpm=args.bpm,
-                      total_bars=args.bars)
+                      total_bars=n_bars or 128)
     print(f"  root={_midi_name(song.root_midi)}  "
           f"scale={_scale_name(song.scale)}  "
           f"tracks={[t.instrument_type for t in song.tracks]}")
@@ -105,10 +106,10 @@ def main():
     midi_path = args.out_midi or (None if args.stream else "/tmp/trance_v3.mid")
 
     if args.stream:
-        buf_l, buf_r = _stream_bars(renderer, args.bars, args.volume, wav_path)
+        buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path)
     else:
-        print(f"Rendering {args.bars} bars...")
-        buf_l, buf_r = renderer.render_bars(args.bars)
+        print(f"Rendering {n_bars} bars...")
+        buf_l, buf_r = renderer.render_bars(n_bars)
 
         if args.volume != 1.0:
             buf_l *= args.volume
@@ -215,7 +216,7 @@ def main():
     print("\nDone.")
 
 
-def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
+def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
                  wav_path: str | None) -> tuple:
     """Render and play back bar-by-bar in real time.
 
@@ -263,8 +264,13 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
     audio_queue: queue.Queue = queue.Queue(maxsize=3)
     SENTINEL = None
 
+    stop_event = threading.Event()
+
     def render_thread():
-        for bar_idx in range(n_bars):
+        bar_idx = 0
+        while not stop_event.is_set():
+            if n_bars is not None and bar_idx >= n_bars:
+                break
             t0 = time.time()
             bar_l, bar_r = renderer._render_bar()
             if volume != 1.0:
@@ -272,6 +278,7 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
                 bar_r = bar_r * volume
             render_ms = (time.time() - t0) * 1000
             audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
+            bar_idx += 1
         audio_queue.put(SENTINEL)
 
     render_t = threading.Thread(target=render_thread, daemon=True)
@@ -280,7 +287,8 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
     stream = sd.OutputStream(samplerate=sr, channels=2, dtype='float32',
                              latency='low')
     stream.start()
-    print(f"Streaming {n_bars} bars in real time — Ctrl-C to stop.")
+    bars_label = f"{n_bars}" if n_bars is not None else "∞"
+    print(f"Streaming {bars_label} bars in real time — Ctrl-C to stop.")
     bar_dur_ms = spb / sr * 1000
 
     try:
@@ -289,7 +297,7 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
             if item is SENTINEL:
                 break
             bar_idx, bar_l, bar_r, render_ms = item
-            print(f"  bar {bar_idx + 1:4d}/{n_bars}  render={render_ms:.0f}ms  "
+            print(f"  bar {bar_idx + 1:4d}/{bars_label}  render={render_ms:.0f}ms  "
                   f"budget={bar_dur_ms:.0f}ms  "
                   f"headroom={bar_dur_ms - render_ms:.0f}ms",
                   end='\r')
@@ -303,10 +311,12 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int, volume: float,
 
     except KeyboardInterrupt:
         print(f"\nStopped at bar {len(all_l)}.")
-        # drain the render thread
+        stop_event.set()
         while not audio_queue.empty():
-            audio_queue.get_nowait()
+            try: audio_queue.get_nowait()
+            except: break
     finally:
+        stop_event.set()
         render_t.join(timeout=2.0)
         stream.stop()
         stream.close()
