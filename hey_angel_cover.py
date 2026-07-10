@@ -177,6 +177,33 @@ class HeyAngelRenderer:
         self.song = HeyAngelSong(bpm=BPM, sr=sr)
         self.ca_state: dict = {}
 
+    @classmethod
+    def from_params(cls, p: dict, sr: int = SR, n_bars: int = 4) -> 'HeyAngelRenderer':
+        """Instantiate renderer from a flat parameter dict (used by the optimiser)."""
+        from instruments.smooth_lead import SmoothLead
+        from instruments.pad        import SupersawPad
+        from synth.effects          import Sidechain, SchroederReverb
+        from instruments.drums      import DrumKit
+        from song.theory            import PAD_VOICING_OFFSETS
+        r = cls(sr=sr, n_bars=n_bars)
+        r._lead   = SmoothLead(cutoff_hz=p['lead_cutoff_hz'], gain=p['lead_gain'], sr=sr)
+        r._pad    = SupersawPad(root_midi=43, cutoff_slider=p['pad_cutoff_slider'],
+                                sr=sr, voicing_offsets=PAD_VOICING_OFFSETS)
+        r._reverb = SchroederReverb(room_size=p['reverb_room'], wet=p['reverb_wet'], sr=sr)
+        r._sc     = Sidechain(depth=p['sidechain_depth'], attack_s=SIDECHAIN_ATTACK_S, sr=sr)
+        r._kit    = DrumKit(seed=42, sr=sr,
+                            kick_decay_s=p['kick_decay_s'],
+                            kick_pitch_floor=p['kick_pitch_floor'])
+        r._gain_kick       = p['gain_kick']
+        r._gain_bass       = p['gain_bass']
+        r._gain_lead       = p['lead_gain']
+        r._gain_hihat      = p['hihat_gain']
+        r._gain_pluck      = p['gain_pluck']
+        r._gain_pad        = p['pad_gain']
+        r._bass_cutoff_g1  = p['bass_cutoff_g1']
+        r._hihat_decay_s   = p['hihat_decay_s']
+        return r
+
     # ── per-bar render ───────────────────────────────────────────────────────
 
     def render_bar(self) -> tuple:
@@ -235,7 +262,9 @@ class HeyAngelRenderer:
 
         # ── Hi-hat (simple 8th-note pattern) ─────────────────────────────────
         if active['hihat']:
-            hl, hr = self._kit.render_hihat(decay_s=0.06, gain=self._gain_hihat)
+            hl, hr = self._kit.render_hihat(
+                decay_s=getattr(self, '_hihat_decay_s', 0.06),
+                gain=self._gain_hihat)
             for step in range(0, 16, 2):   # every 8th note
                 onset = step * sp16
                 end   = min(onset + len(hl), spb)
@@ -265,7 +294,8 @@ class HeyAngelRenderer:
                 else:
                     # Narrow LPF on G1 drone to suppress G/G# harmonics in chroma.
                     # rlpf_to_hz(0.25) = 81Hz — passes G1=49Hz, kills G2=98Hz+
-                    cutoff = 0.38 if note == 43 else 0.45
+                    cutoff = (getattr(self, '_bass_cutoff_g1', 0.38)
+                              if note == 43 else 0.45)
                     bl, br = self._bass.render(
                         note, n_smp, gain=self._gain_bass,
                         cutoff_slider=cutoff,
