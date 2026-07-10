@@ -635,10 +635,7 @@ class Visualiser:
                     continue
                 src_col_idx = min(int(src_c / av_scaled_w * av_w), av_w - 1)
                 src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
-                if av_contain and src_ch == ' ':
-                    chars.append(f'{_DIM}{ch}{_RESET}')
-                else:
-                    chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
+                chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
             return ''.join(chars)
 
         ca_rendered = []

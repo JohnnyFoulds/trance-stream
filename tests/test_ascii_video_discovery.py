@@ -184,16 +184,16 @@ def test_cover_scale_uses_max_not_min():
     )
 
 
-def test_space_transparent_only_in_contain_mode():
-    """Space is transparent in contain mode (logo art) but opaque in cover mode (full-frame art)."""
+def test_contain_mode_uses_av_color_for_all_in_bounds_chars():
+    """In contain mode, every in-bounds source char (including space) goes through
+    _av_color — space gets dim-blue background, same as Star Wars / Bad Apple.
+    Only out-of-bounds letterbox margins fall back to plain dim."""
     import visualiser as _vis
     import inspect
     src = inspect.getsource(_vis.Visualiser._render)
-    # The contain guard must exist and be conditional
-    assert 'av_contain' in src, "_render must branch on av_contain for transparency"
-    assert "src_ch == ' '" in src or 'src_ch == " "' in src, (
-        "_render must treat space as transparent in contain mode"
-    )
+    assert 'av_contain' in src, "_render must use av_contain for letterbox margins"
+    # _av_color must be called unconditionally for in-bounds chars
+    assert '_av_color(src_ch)' in src, "_render must call _av_color for all in-bounds chars"
 
 
 def test_content_fill_ratio_full_frame():
