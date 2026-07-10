@@ -33,7 +33,7 @@ class SongRenderer:
 
     def __init__(self, song: 'Song', active_tracks: set = None):
         from song.theory import samples_per_bar, samples_per_sixteenth
-        from song.theory import SIDECHAIN_DEPTH, SIDECHAIN_ATTACK_S
+        from song.theory import SIDECHAIN_DEPTH, SIDECHAIN_ATTACK_S, SIDECHAIN_DEPTH_HEY_ANGEL
         from synth.effects import Sidechain
 
         self.song    = song
@@ -42,7 +42,9 @@ class SongRenderer:
         self._sp16   = samples_per_sixteenth(song.bpm, song.sr)
         self._bar    = 0
         self._active_tracks = active_tracks  # None = all active; set of names = filter
-        self._sidechain = Sidechain(depth=SIDECHAIN_DEPTH,
+        style = getattr(song, 'style', 'trance')
+        sc_depth = SIDECHAIN_DEPTH_HEY_ANGEL if style == 'hey_angel' else SIDECHAIN_DEPTH
+        self._sidechain = Sidechain(depth=sc_depth,
                                     attack_s=SIDECHAIN_ATTACK_S, sr=song.sr)
         self._audio_l: list[np.ndarray] = []
         self._audio_r: list[np.ndarray] = []
@@ -142,7 +144,11 @@ class SongRenderer:
         kick_track = self._get_track('kick')
         if kick_track and kick_track.is_active(bar):
             kit = kick_track.instrument
-            if bar >= sb.get('kick_syncopated', 9999):
+            style = getattr(song, 'style', 'trance')
+            if style == 'hey_angel':
+                from song.theory import KICK_STEPS_HALFTIME
+                kick_steps = KICK_STEPS_HALFTIME
+            elif bar >= sb.get('kick_syncopated', 9999):
                 kick_steps = KICK_STEPS_SYNCOPATED
             else:
                 kick_steps = KICK_STEPS_BASIC
@@ -258,30 +264,62 @@ class SongRenderer:
         bass_track = self._get_track('bass')
         if bass_track and bass_track.is_active(bar) and not in_breakdown:
             from song.theory import BASS_STEPS_A, BASS_STEPS_B, GAIN_BASS
-            # CA density above 0.55 → denser step pattern (more hits per bar).
-            # Below that threshold alternate A/B as before.
-            ca_density = self.ca_state.get('density', 0.5)
-            if ca_density > 0.55:
-                bass_steps = BASS_STEPS_B
-            else:
-                bass_steps = BASS_STEPS_A if bar % 2 == 0 else BASS_STEPS_B
-            bass_midi = chord_midi[0] - 12
-            bass_midi = max(24, min(60, bass_midi))
-            kwargs = bass_track.render_kwargs(bar)
-            # Per-step rendering: fire a fresh acidenv at each onset position.
-            # Each note renders for 2 sixteenth-note durations (the acidenv
-            # decays within ~80-150ms; 2×4725=9450 samples ≈ 214ms).
+            style = getattr(song, 'style', 'trance')
             bass_l_bar = np.zeros(spb, dtype=np.float32)
             bass_r_bar = np.zeros(spb, dtype=np.float32)
-            step_dur = sp16 * 2
-            for step in bass_steps:
-                onset = step * sp16
-                if onset >= spb:
-                    continue
-                n_step = min(step_dur, spb - onset)
-                bl, br = bass_track.instrument.render(bass_midi, n_step, gain=1.0, **kwargs)
-                bass_l_bar[onset:onset + n_step] += bl
-                bass_r_bar[onset:onset + n_step] += br
+            kwargs = bass_track.render_kwargs(bar)
+
+            if style == 'hey_angel':
+                # "Hey Angel…" bass pattern (research/analysis/hey_angel_analysis.md §4c):
+                # G1(quarter=4 steps) → F2(8th=2 steps) → portamento sweep F2→G1(8th=2 steps)
+                # G1=MIDI 43, F2=MIDI 53 (flat-7 above G1)
+                HA_G1 = 43
+                HA_F2 = 53
+                # Hit 1: G1 held for 4 sixteenths (quarter note) at step 0
+                n_quarter = sp16 * 4
+                n_q = min(n_quarter, spb)
+                bl, br = bass_track.instrument.render(HA_G1, n_q, gain=1.0, **kwargs)
+                bass_l_bar[0:n_q] += bl
+                bass_r_bar[0:n_q] += br
+                # Hit 2: F2 for 2 sixteenths (eighth note) at step 4
+                onset_f2 = sp16 * 4
+                n_8th = sp16 * 2
+                n_f2 = min(n_8th, spb - onset_f2)
+                if n_f2 > 0:
+                    bl, br = bass_track.instrument.render(HA_F2, n_f2, gain=1.0, **kwargs)
+                    bass_l_bar[onset_f2:onset_f2 + n_f2] += bl
+                    bass_r_bar[onset_f2:onset_f2 + n_f2] += br
+                # Hit 3: portamento glide F2→G1 over 2 sixteenths (eighth note) at step 6
+                onset_sweep = sp16 * 6
+                n_sweep = min(n_8th, spb - onset_sweep)
+                if n_sweep > 0:
+                    # portamento_s > 0 triggers linear pitch glide in AcidBass.render()
+                    bl, br = bass_track.instrument.render(
+                        HA_F2, n_sweep, gain=1.0,
+                        portamento_s=float(n_sweep) / song.sr,
+                        target_midi=HA_G1, **kwargs)
+                    bass_l_bar[onset_sweep:onset_sweep + n_sweep] += bl
+                    bass_r_bar[onset_sweep:onset_sweep + n_sweep] += br
+            else:
+                # CA density above 0.55 → denser step pattern (more hits per bar).
+                ca_density = self.ca_state.get('density', 0.5)
+                if ca_density > 0.55:
+                    bass_steps = BASS_STEPS_B
+                else:
+                    bass_steps = BASS_STEPS_A if bar % 2 == 0 else BASS_STEPS_B
+                bass_midi = chord_midi[0] - 12
+                bass_midi = max(24, min(60, bass_midi))
+                # Per-step rendering: fire a fresh acidenv at each onset position.
+                step_dur = sp16 * 2
+                for step in bass_steps:
+                    onset = step * sp16
+                    if onset >= spb:
+                        continue
+                    n_step = min(step_dur, spb - onset)
+                    bl, br = bass_track.instrument.render(bass_midi, n_step, gain=1.0, **kwargs)
+                    bass_l_bar[onset:onset + n_step] += bl
+                    bass_r_bar[onset:onset + n_step] += br
+
             bass_l_bar *= GAIN_BASS
             bass_r_bar *= GAIN_BASS
             if kick_buf_l is not None:
@@ -295,97 +333,105 @@ class SongRenderer:
         if lead_track and lead_track.is_active(bar) and not in_breakdown:
             from song.pattern import lead_melody_pattern
             kwargs = lead_track.render_kwargs(bar)
+            style = getattr(song, 'style', 'trance')
 
-            # SA's lead sits +24 semitones above the base chord (two octaves above
-            # the unshifted chord_midi, one octave above the pad which is at +12).
-            # chord_midi is in the C3 register; pad is at +12 (C4); lead at +24 (C5).
-            # This matches SA's .add 14 in a 7-note scale: +14 scale steps = +24 semitones
-            # = two octaves, placing the lead in C5-F5 (~523-698 Hz) where it cuts above
-            # the pad without clashing.
-            #
-            # CA voicing offset — SA's .add "<5 4 0 <0 2>>" equivalent.
-            # Two centre CA bits pick from (0, 2, 5, 7) semitones added to all lead notes,
-            # creating non-repeating harmonic colour shifts without changing the chord.
-            # Only applied once the lead melody has started to avoid shifting the root drone.
-            # Voicing offset: from CA if viz is active, else from seed-derived
-            # pseudo-random sequence so it's always non-zero and non-repeating.
-            _OFFSETS = (0, 2, 5, 7)
-            if 'voicing_offset' in self.ca_state:
-                ca_vo = self.ca_state['voicing_offset']
-            else:
-                # LFSR-style: hash(seed + bar) gives non-repeating, deterministic
-                # variation without needing the full CA.
-                _h = hash((song.seed, bar)) & 0xFF
-                ca_vo = _OFFSETS[_h % len(_OFFSETS)]
-
-            if bar >= sb.get('lead_melody_on', 9999):
-                # Build a 5-tone scale vocabulary from the chord root + 4 steps above.
-                # Target register: song_root + 24 ± 6 semitones (C5 range for G root).
-                # If a computed note would sit too high (>+30 semitones above song root),
-                # fold it down an octave so the melody stays in the C5-F5 window where
-                # it cuts above the pad without being shrieky.
-                from song.theory import degree_to_midi
-                chord_root_degree = chord_degrees[0]
-                target_centre = effective_root + 24 + ca_vo
-                raw_vocab = [
-                    degree_to_midi(chord_root_degree + i, effective_root, song.scale)
-                    for i in range(5)
-                ]
-                # Fold each note into the lead register: transpose by octaves until
-                # the note sits within 6 semitones below target_centre or up to +11 above.
-                lead_vocab = []
-                for note in raw_vocab:
-                    note += 24 + ca_vo
-                    while note > target_centre + 11:
-                        note -= 12
-                    while note < target_centre - 6:
-                        note += 12
-                    lead_vocab.append(note)
-                lead_chord_midi = lead_vocab
-                lead_root_midi  = lead_vocab[0]
-            else:
-                lead_chord_midi = [m + 24 for m in chord_midi]
-                lead_root_midi  = effective_root + 24
-
-            # CA density drives delay wet: dense CA = more wash (0.25–0.85).
-            # Falls back to seed+bar derived value without viz.
-            if 'density' in self.ca_state:
-                ca_density = self.ca_state['density']
-            else:
-                _h2 = hash((song.seed, bar + 1)) & 0xFF
-                ca_density = 0.3 + (_h2 / 255.0) * 0.5   # 0.3–0.8 range
-            lead_track.instrument._delay._wet = 0.25 + ca_density * 0.6
-
-            if bar >= sb.get('lead_melody_on', 9999):
-                # SA's melody: two sparse notes per bar (steps 4 and 10),
-                # each sustained for 6 sixteenth-notes; note choices cycle by bar.
-                pattern = lead_melody_pattern(lead_chord_midi, bar)
-                lead_l_bar = np.zeros(spb, dtype=np.float32)
-                lead_r_bar = np.zeros(spb, dtype=np.float32)
-                # 6 sixteenth-notes per note — matches SA's @@2 / @3 weighting.
-                # SA holds notes for ~3/8 of a bar; the acidenv decays in ~120ms
-                # but the trancegate shapes the amplitude further.
-                step_dur = sp16 * 6
-                for step, note in zip(pattern.steps, pattern.notes):
-                    onset = step * sp16
-                    if onset >= spb:
-                        continue
-                    n_step = min(step_dur, spb - onset)
-                    sl, sr_ = lead_track.instrument.render(
-                        [note], n_step, bar_offset_samples=bar * spb + onset,
-                        samples_per_bar=spb, **kwargs)
-                    lead_l_bar[onset:onset + n_step] += sl
-                    lead_r_bar[onset:onset + n_step] += sr_
-                lead_l, lead_r = lead_l_bar, lead_r_bar
-            else:
-                # Root note only: single render for whole bar
+            if style == 'hey_angel':
+                # "Hey Angel…" melody: C4→F#3 chromatic descend with slow portamento
+                # Rate ~15 sem/sec = 0.067s/semitone; 6 semitones over ~0.4s per bar
+                # (research/analysis/hey_angel_analysis.md §4a)
+                # C4=MIDI 60, F#3=MIDI 54; descend cycles bar-by-bar
+                HA_MELODY_START = 60   # C4
+                HA_MELODY_END   = 54   # F#3
+                # Render the whole bar as one smooth portamento glide C4→F#3
                 lead_l, lead_r = lead_track.instrument.render(
-                    [lead_root_midi], spb, bar_offset_samples=bar * spb,
-                    samples_per_bar=spb, **kwargs)
+                    [HA_MELODY_START], spb,
+                    bar_offset_samples=bar * spb,
+                    samples_per_bar=spb,
+                    portamento_s=float(spb) / song.sr,
+                    target_midi=HA_MELODY_END,
+                    **kwargs)
+                if kick_buf_l is not None:
+                    lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
+                mix_l += lead_l
+                mix_r += lead_r
+                # Pluck rendering handled below (outside lead block)
+            else:
+                # SA's lead sits +24 semitones above the base chord (two octaves above
+                # the unshifted chord_midi, one octave above the pad which is at +12).
+                # chord_midi is in the C3 register; pad is at +12 (C4); lead at +24 (C5).
+                # CA voicing offset — SA's .add "<5 4 0 <0 2>>" equivalent.
+                _OFFSETS = (0, 2, 5, 7)
+                if 'voicing_offset' in self.ca_state:
+                    ca_vo = self.ca_state['voicing_offset']
+                else:
+                    _h = hash((song.seed, bar)) & 0xFF
+                    ca_vo = _OFFSETS[_h % len(_OFFSETS)]
+
+                if bar >= sb.get('lead_melody_on', 9999):
+                    from song.theory import degree_to_midi
+                    chord_root_degree = chord_degrees[0]
+                    target_centre = effective_root + 24 + ca_vo
+                    raw_vocab = [
+                        degree_to_midi(chord_root_degree + i, effective_root, song.scale)
+                        for i in range(5)
+                    ]
+                    lead_vocab = []
+                    for note in raw_vocab:
+                        note += 24 + ca_vo
+                        while note > target_centre + 11:
+                            note -= 12
+                        while note < target_centre - 6:
+                            note += 12
+                        lead_vocab.append(note)
+                    lead_chord_midi = lead_vocab
+                    lead_root_midi  = lead_vocab[0]
+                else:
+                    lead_chord_midi = [m + 24 for m in chord_midi]
+                    lead_root_midi  = effective_root + 24
+
+                if 'density' in self.ca_state:
+                    ca_density = self.ca_state['density']
+                else:
+                    _h2 = hash((song.seed, bar + 1)) & 0xFF
+                    ca_density = 0.3 + (_h2 / 255.0) * 0.5
+                lead_track.instrument._delay._wet = 0.25 + ca_density * 0.6
+
+                if bar >= sb.get('lead_melody_on', 9999):
+                    pattern = lead_melody_pattern(lead_chord_midi, bar)
+                    lead_l_bar = np.zeros(spb, dtype=np.float32)
+                    lead_r_bar = np.zeros(spb, dtype=np.float32)
+                    step_dur = sp16 * 6
+                    for step, note in zip(pattern.steps, pattern.notes):
+                        onset = step * sp16
+                        if onset >= spb:
+                            continue
+                        n_step = min(step_dur, spb - onset)
+                        sl, sr_ = lead_track.instrument.render(
+                            [note], n_step, bar_offset_samples=bar * spb + onset,
+                            samples_per_bar=spb, **kwargs)
+                        lead_l_bar[onset:onset + n_step] += sl
+                        lead_r_bar[onset:onset + n_step] += sr_
+                    lead_l, lead_r = lead_l_bar, lead_r_bar
+                else:
+                    lead_l, lead_r = lead_track.instrument.render(
+                        [lead_root_midi], spb, bar_offset_samples=bar * spb,
+                        samples_per_bar=spb, **kwargs)
+                if kick_buf_l is not None:
+                    lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
+                mix_l += lead_l
+                mix_r += lead_r
+
+        # ── Pluck (Hey Angel style only) ──────────────────────────────────────
+        pluck_track = self._get_track('pluck')
+        if pluck_track and pluck_track.is_active(bar):
+            # E5 = MIDI 76 = 660 Hz; sustained for whole bar
+            HA_E5 = 76
+            pl_l, pl_r = pluck_track.instrument.render(HA_E5, spb,
+                                                        gain=pluck_track.gain_target)
             if kick_buf_l is not None:
-                lead_l, lead_r = self._sidechain.process(lead_l, lead_r, kick_buf_l)
-            mix_l += lead_l
-            mix_r += lead_r
+                pl_l, pl_r = self._sidechain.process(pl_l, pl_r, kick_buf_l)
+            mix_l += pl_l
+            mix_r += pl_r
 
         # Master gain arc: 0.55 → 1.0 over the first half of the song
         mix_l *= master_gain

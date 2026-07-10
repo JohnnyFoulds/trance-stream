@@ -29,7 +29,9 @@ class AcidBass:
 
     def render(self, midi_note: int, n_samples: int,
                cutoff_slider: float = 0.45,
-               gain: float = None) -> tuple:
+               gain: float = None,
+               portamento_s: float = 0.0,
+               target_midi: int = None) -> tuple:
         """Render one bass note for n_samples.
 
         Parameters
@@ -43,6 +45,13 @@ class AcidBass:
             Default 0.45 ≈ 1336 Hz — appropriate for sub-bass.
         gain : float, optional
             Output gain override; if None uses the instance value.
+        portamento_s : float
+            Glide time in seconds.  If > 0 and target_midi is given, pitch
+            slides linearly (in semitone space) from midi_note to target_midi
+            over n_samples.  portamento_s is used only to signal intent; the
+            glide spans exactly n_samples regardless of its value.
+        target_midi : int, optional
+            Target MIDI note for portamento glide.  Ignored if portamento_s==0.
 
         Returns
         -------
@@ -62,9 +71,30 @@ class AcidBass:
             return (np.zeros(0, dtype=np.float32),
                     np.zeros(0, dtype=np.float32))
 
-        freq_hz = 440.0 * 2.0 ** ((midi_note - 69) / 12.0)
-        samples, self._osc_phase = sawtooth(freq_hz, n_samples, self.sr,
-                                            phase=self._osc_phase)
+        # ── Oscillator (optionally with portamento) ───────────────────────────
+        use_portamento = (portamento_s > 0.0 and target_midi is not None)
+        if use_portamento:
+            # Render 64 segments with linearly interpolated pitch (semitone space).
+            # polyBLEP anti-aliasing is preserved because we reuse sawtooth() per seg.
+            end_midi = float(max(0, min(127, int(target_midi))))
+            midi_vals = np.linspace(float(midi_note), end_midi, 64)
+            seg_len = max(1, n_samples // 64)
+            samples = np.empty(n_samples, dtype=np.float32)
+            phase = self._osc_phase
+            for seg in range(64):
+                s = seg * seg_len
+                e = (s + seg_len) if seg < 63 else n_samples
+                e = min(e, n_samples)
+                if s >= n_samples:
+                    break
+                freq_seg = 440.0 * 2.0 ** ((midi_vals[seg] - 69.0) / 12.0)
+                seg_buf, phase = sawtooth(freq_seg, e - s, self.sr, phase)
+                samples[s:e] = seg_buf
+            self._osc_phase = phase
+        else:
+            freq_hz = 440.0 * 2.0 ** ((midi_note - 69) / 12.0)
+            samples, self._osc_phase = sawtooth(freq_hz, n_samples, self.sr,
+                                                phase=self._osc_phase)
 
         # VCA: percussive amplitude envelope (3ms attack, 75ms exponential decay).
         t = np.arange(n_samples, dtype=np.float32) / self.sr

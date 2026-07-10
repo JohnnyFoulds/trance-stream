@@ -103,6 +103,9 @@ BASS_STEPS_B = [0, 2, 5, 7, 10, 13, 15]  # 7-hit syncopated, no consecutive step
 # Source: docs/music_theory/03_trance_rhythm.md §1
 KICK_STEPS_BASIC      = [0, 4, 8, 12]          # four-on-floor
 KICK_STEPS_SYNCOPATED = [0, 4, 8, 11, 14]      # SA's trance pump pattern
+# "Hey Angel…" half-time feel: kick on half-notes only, confirmed from sub-bass peak detection
+# (reference: research/analysis/hey_angel_analysis.md §1)
+KICK_STEPS_HALFTIME   = [0, 8]                  # half-time: kick on half-notes only
 CLAP_STEPS_BACKBEAT   = [4, 12]                # beats 2 and 4
 CLAP_STEPS_SYNCOPATED = [0, 4, 8, 11, 14]     # matches kick (some SA sessions)
 HIHAT_STEPS           = list(range(16))        # all 16th notes (full pattern)
@@ -129,6 +132,9 @@ TRANCEGATE_AMOUNT = 0.7    # depth: trough=0.3, peak=1.0 — breathes without go
 # SA's confirmed .duck().duckattack(.16).duckdepth(.6)
 SIDECHAIN_DEPTH    = 0.6    # pad reduces to 0.4 gain on kick hit
 SIDECHAIN_ATTACK_S = 0.16   # recovery time constant (exponential)
+# "Hey Angel…" measured peak-to-min duck: floor=0.279 → depth=0.721 → -11.1dB
+# (reference: research/analysis/hey_angel_analysis.md §5)
+SIDECHAIN_DEPTH_HEY_ANGEL = 0.721
 
 # ---------------------------------------------------------------------------
 # GAIN VALUES

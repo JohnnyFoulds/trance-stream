@@ -41,3 +41,6 @@ class Song:
     # Harmonic modulation — creates a second-half shift at the pullback
     chord_prog_b:   list = None   # second progression used after filter_pb_bar; None = loop A forever
     root_shift:     int  = 0      # semitones added to root after pullback (0 or +2)
+
+    # Style variant: 'trance' (default SA procedural) or 'hey_angel' (Hey Angel synthesis)
+    style:          str  = 'trance'
