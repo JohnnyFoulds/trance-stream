@@ -120,6 +120,29 @@ window.__debug = { get repl() { return _repl; }, get ready() { return _ready; } 
     _repl = await initStrudel();
     console.log('[strudel-debug] init: initStrudel() done');
 
+    // Tap Strudel's AudioContext for WAV capture.
+    // Strudel captures the AudioContext constructor at module-load time, so patching
+    // window.AudioContext (as __capturerSetup does) never intercepts it. Instead we
+    // use window.getAudioContext() — set by initStrudel() — to get the real context,
+    // create an analyser, connect it to the destination, and patch createGain so all
+    // future gain nodes (created on snippet play) pipe into the analyser.
+    ;(function capturerSetupDirect() {
+      const ac = window.getAudioContext?.();
+      if (!ac) { console.warn('[strudel-debug] captureSetup: getAudioContext() returned null — WAV capture unavailable'); return; }
+      window.__captureAC = ac;
+      const analyser = ac.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.connect(ac.destination);
+      window.__captureAnalyser = analyser;
+      const _origCG = ac.createGain.bind(ac);
+      ac.createGain = function() {
+        const g = _origCG();
+        g.connect(analyser);
+        return g;
+      };
+      console.log('[strudel-debug] captureSetup: tapped AudioContext for WAV capture');
+    })();
+
     // Load the TR909 (and all other drum machine) sample banks.
     // bank("RolandTR909") in snippet c2 will silently fail unless this index
     // is fetched first. strudel.b-cdn.net hosts the canonical tidal-drum-machines

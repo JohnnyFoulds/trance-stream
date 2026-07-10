@@ -119,10 +119,13 @@ HIHAT_DECAY_S_MAX     = 0.12
 # TRANCEGATE
 # ---------------------------------------------------------------------------
 
-# Source: docs/music_theory/03_trance_rhythm.md §4
-TRANCEGATE_SPEED  = 1.5    # cycles per bar — creates 3/2 polyrhythm vs 4/4
-TRANCEGATE_ANGLE  = 45.0   # degrees — cosine shape, equal rise/fall time
-TRANCEGATE_AMOUNT = 0.7    # depth: trough=0.3, peak=1.0 — breathes without going silent
+# Source: research/strudel_debug.html — SA's trancegate(1, 45, 1) Strudel source
+# rand.mul(density+0.5).round().seg(16): binary 16-slot gate, P(on) = P(rand*1.5 >= 0.5) ≈ 2/3
+# seed=45: SA's confirmed seed arg from OCR session GWXCCBsOMSg
+# floor=0.3: deliberate departure from SA's clip(.7); avoids hard transients into FDN reverb
+TRANCEGATE_DENSITY = 0.667   # P(slot on) ≈ 2/3
+TRANCEGATE_FLOOR   = 0.3     # off-slot gain; SA uses 0.7 but 0.3 avoids FDN transients
+TRANCEGATE_SEED    = 45      # SA's seed argument
 
 # ---------------------------------------------------------------------------
 # SIDECHAIN

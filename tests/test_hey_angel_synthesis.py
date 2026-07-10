@@ -37,9 +37,14 @@ def hey_angel_song():
 
 
 @pytest.fixture(scope="module")
-def hey_angel_render(hey_angel_song):
+def hey_angel_render():
+    # Use a fresh song instance so that tests sharing hey_angel_song (which
+    # render into its instruments and mutate their phase/delay state) don't
+    # corrupt the render used for clipping / audibility assertions.
+    from song.builder import build_hey_angel_song
     from song.renderer import SongRenderer
-    renderer = SongRenderer(hey_angel_song)
+    song = build_hey_angel_song(total_bars=32)
+    renderer = SongRenderer(song)
     buf_l, buf_r = renderer.render_bars(16)
     return buf_l, buf_r
 

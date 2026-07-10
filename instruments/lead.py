@@ -93,7 +93,7 @@ class AcidLead:
         from synth.oscillators import supersaw
         from synth.filters import lpf2, rlpf_to_hz
         from synth.envelopes import acidenv, trancegate
-        from song.theory import (TRANCEGATE_SPEED, TRANCEGATE_AMOUNT,
+        from song.theory import (TRANCEGATE_DENSITY, TRANCEGATE_FLOOR, TRANCEGATE_SEED,
                                   samples_per_bar as _samples_per_bar)
 
         slider = cutoff_slider if cutoff_slider is not None else self.cutoff_slider
@@ -184,10 +184,10 @@ class AcidLead:
             buf_l[s:e], zi_l = lpf2(buf_l[s:e], seg_cut, q=2.0, sr=self.sr, zi=zi_l)
             buf_r[s:e], zi_r = lpf2(buf_r[s:e], seg_cut, q=2.0, sr=self.sr, zi=zi_r)
 
-        # Trancegate: smooth cosine amplitude gate at 1.5× bar rate.
         gate  = trancegate(n_samples, self.sr, spb,
                            bar_offset_samples=bar_offset_samples,
-                           speed=TRANCEGATE_SPEED, amount=TRANCEGATE_AMOUNT)
+                           density=TRANCEGATE_DENSITY, floor=TRANCEGATE_FLOOR,
+                           seed=TRANCEGATE_SEED)
         buf_l *= gate
         buf_r *= gate
 

@@ -32,7 +32,7 @@ The target sound requires getting five things right simultaneously:
 | **Pad** | 5-voice supersaw, very dark LP filter (~400 Hz), trancegate breathing, FDN reverb, sidechain pump | `instruments/pad.py` — full chain implemented |
 | **Kick** | TR-909 style: 285→50 Hz pitch sweep, tau=31 ms, decay 120 ms | `instruments/drums.py` — confirmed constants |
 | **Sidechain** | Pad/bass duck to ~40% on every kick; `.duckdepth(.6)` | `SIDECHAIN_DEPTH=0.6` in `song/theory.py` |
-| **Trancegate** | Smooth cosine pulse, 1.5 cycles/bar | `synth/envelopes.py` |
+| **Trancegate** | Probabilistic binary gate, 16 steps/bar, density=2/3 (SA's rand.mul(1.5).round().seg(16)) | `synth/envelopes.py` |
 | **Chord progression** | C min → D min → Eb maj → F maj (iv–v–bVI–bVII), 4 bars per chord, G natural minor at 140 BPM | `song/theory.py` — SA-confirmed values |
 
 ### What is done and what remains

@@ -66,29 +66,60 @@ def trancegate(
     sr: int,
     samples_per_bar: int,
     bar_offset_samples: int = 0,
-    speed: float = 1.5,
-    amount: float = 1.0,
+    density: float = 0.667,
+    floor: float = 0.3,
+    seed: int = 45,
 ) -> np.ndarray:
-    """SA's trancegate: smooth cosine amplitude gate at speed x bar rate.
+    """SA's trancegate: probabilistic binary gate, 16 steps per bar.
 
-    SA's confirmed params: trancegate(1.5, 45, 1)
-    speed=1.5 creates a 3/2 polyrhythm against a 4/4 kick. The 45-degree angle
-    parameter in SA's trancegate corresponds to equal rise/fall time, modelled
-    as a raised cosine: (1 + cos(theta)) / 2.
+    Models SA's Strudel expression:
+        rand.mul(density+0.5).round().seg(16).rib(seed, length)
+    Each of 16 slots per bar is independently switched on (gain=1.0) or off
+    (gain=floor) based on a seeded random draw: P(on) = density.
 
-    bar_offset_samples: how many samples into the current bar we are,
-    for phase continuity when called bar-by-bar.
+    Per-bar patterns are reproducible given the same seed + bar index, matching
+    Strudel's .rib(seed, length) behaviour.
 
-    Returns envelope in [0, 1], shape (n_samples,).
+    SA's gate triggers note events rather than multiplying a continuous audio
+    stream, so transitions are naturally smooth (envelope attack/release).  We
+    approximate this with a 5 ms linear crossfade at each slot boundary to
+    eliminate broadband click transients from hard amplitude steps.
+
+    floor=0.3 is a deliberate departure from SA's .clip(.7) = 0.7 amplitude on
+    open slots; our lower floor avoids hard transients into the FDN reverb.
+
+    Returns envelope in [floor, 1.0], shape (n_samples,).
     """
-    gate_period_samples = samples_per_bar / speed
-    t = np.arange(n_samples, dtype=np.float64) + bar_offset_samples
-    phase = 2.0 * np.pi * t / gate_period_samples
-    # Raised cosine from 0→1. amount=1.0 means trough=0 (full silence).
-    # SA's gate with .room(0.7) reverb fills those silences with reverb tail.
-    # Our FDN is shorter, so we lift the trough floor: trough = 1 - amount.
-    # amount=0.7 → trough=0.3 → gate breathes between 0.3 and 1.0 (never silent).
-    cosine_01 = (1.0 + np.cos(phase + np.pi)) / 2.0
-    floor = 1.0 - amount
-    env = floor + cosine_01 * amount
-    return env.astype(np.float32)
+    n_slots  = 16
+    slot_len = max(1, samples_per_bar // n_slots)
+    bar_offset = bar_offset_samples % samples_per_bar
+    bar_index  = bar_offset_samples // samples_per_bar
+
+    rng    = np.random.default_rng(seed + bar_index)
+    on_off = (rng.random(n_slots) < density).astype(np.float32)
+    pattern = np.where(on_off, 1.0, floor)
+
+    env = np.full(samples_per_bar, floor, dtype=np.float32)
+    for i in range(n_slots):
+        s = i * slot_len
+        e = min((i + 1) * slot_len, samples_per_bar)
+        env[s:e] = pattern[i]
+
+    # 5 ms linear crossfade at each slot boundary to eliminate click transients.
+    fade_len = min(int(0.005 * sr), slot_len // 4)
+    if fade_len > 1:
+        for i in range(1, n_slots):
+            boundary = i * slot_len
+            if boundary >= samples_per_bar:
+                break
+            v_prev = pattern[i - 1]
+            v_next = pattern[i]
+            if v_prev != v_next:
+                fade_start = max(0, boundary - fade_len // 2)
+                fade_end   = min(samples_per_bar, boundary + (fade_len - fade_len // 2))
+                n_fade = fade_end - fade_start
+                env[fade_start:fade_end] = np.linspace(v_prev, v_next, n_fade, dtype=np.float32)
+
+    tiles_needed = (bar_offset + n_samples) // samples_per_bar + 2
+    full = np.tile(env, tiles_needed)
+    return full[bar_offset: bar_offset + n_samples].copy()

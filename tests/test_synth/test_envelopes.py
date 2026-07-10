@@ -92,29 +92,35 @@ def test_trancegate_output_range():
     assert env.max() <= 1.0
 
 
-def test_trancegate_smooth():
-    """No adjacent sample difference should exceed 0.05."""
+def test_trancegate_is_binary():
+    """Binary gate must produce only floor or 1.0 values — no intermediate levels."""
     samples_per_bar = 75600
-    env = trancegate(samples_per_bar, SR, samples_per_bar)
-    max_jump = float(np.abs(np.diff(env.astype(np.float64))).max())
-    assert max_jump <= 0.0006, f"Max adjacent jump {max_jump:.6f} exceeds 0.0006 (raised-cosine max is ~0.000062)"
-
-
-def test_trancegate_cycle_count_with_speed_1_5():
-    """speed=1.5 should produce 1.5 cycles per bar → ~3 zero-crossings of (gate - 0.5)."""
-    samples_per_bar = 75600
-    env = trancegate(samples_per_bar, SR, samples_per_bar, speed=1.5)
-    centered = env.astype(np.float64) - 0.5
-    # Count sign reversals. The gate period divides evenly into the bar so the
-    # raised cosine can land exactly on centered=0.0 at an integer sample; the
-    # product approach (a*b < 0) returns 0 in that case and misses the crossing.
-    # Instead, count pairs where the signal goes neg→non-neg or pos→non-pos:
-    a, b = centered[:-1], centered[1:]
-    crossings = int(np.sum(((a < 0) & (b >= 0)) | ((a > 0) & (b <= 0))))
-    # 1.5 cycles × 2 crossings per cycle = 3; allow ±1 for boundary effects.
-    assert abs(crossings - 3) <= 1, (
-        f"Expected ~3 zero-crossings, got {crossings}"
+    env = trancegate(samples_per_bar, SR, samples_per_bar, density=0.667, floor=0.3, seed=45)
+    # Convert to float64 before unique-value check to avoid float32/float64 hash mismatch
+    unique_vals = set(np.unique(env.astype(np.float64)))
+    floor = 0.3
+    assert all(abs(v - floor) < 1e-5 or abs(v - 1.0) < 1e-5 for v in unique_vals), (
+        f"Binary gate produced non-binary values: {unique_vals}"
     )
+
+
+def test_trancegate_has_16_slots_per_bar():
+    """Binary gate must have ≤16 transitions per bar; all runs must be multiples of slot_len.
+    Consecutive same-value slots merge into wider runs — that is correct behaviour.
+    """
+    samples_per_bar = 75600
+    env = trancegate(samples_per_bar, SR, samples_per_bar, density=0.667, floor=0.3, seed=45)
+    slot_len = samples_per_bar // 16
+    transitions = np.where(np.diff(env) != 0)[0] + 1
+    assert len(transitions) <= 16, (
+        f"Expected ≤16 slot transitions per bar, got {len(transitions)}"
+    )
+    if len(transitions) > 0:
+        gaps = np.diff(np.concatenate([[0], transitions, [samples_per_bar]]))
+        # Each run must be an exact multiple of slot_len (merged identical slots are 2×, 3×, etc.)
+        assert all(g % slot_len == 0 for g in gaps), (
+            f"Some run lengths are not multiples of slot_len={slot_len}: {gaps}"
+        )
 
 
 def test_trancegate_dtype():
