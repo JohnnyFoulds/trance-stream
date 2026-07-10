@@ -137,7 +137,7 @@ def main():
     ascii_video_paths = args.ascii_video
     if ascii_video_paths is None or ascii_video_paths == []:
         import glob as _glob
-        ascii_video_paths = sorted(_glob.glob("ascii_videos/*.txt")) or None
+        ascii_video_paths = sorted(_glob.glob(str(REPO_ROOT / "ascii_videos" / "*.txt"))) or None
 
     if args.stream:
         buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path,

@@ -682,7 +682,7 @@ class Visualiser:
 
             if age == 1 and av_frame is None:
                 # Newest row label only in default mode
-                cells_w = ca_inner - len(label_txt)
+                cells_w = max(ca_inner - len(label_txt), 0)
                 ca_color = _CA_PALETTE[chord_idx % len(_CA_PALETTE)]
                 bright = _DIM if fslider < 0.5 else (_BOLD if fslider > 0.7 else '')
                 ca_rendered.append(

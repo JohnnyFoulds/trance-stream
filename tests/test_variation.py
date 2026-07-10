@@ -272,7 +272,7 @@ def test_audio_rms_differs_across_seeds():
     rms_range = max(rms_values) - min(rms_values)
     # Even small differences in BPM change spb, causing minor RMS shifts.
     # We just verify they're not all identical.
-    assert rms_range > 0.0, f"All seeds produced identical RMS: {rms_values}"
+    assert rms_range > 0.01, f"RMS range across seeds {rms_range:.4f} is too small: {rms_values}"
 
 
 # ---------------------------------------------------------------------------

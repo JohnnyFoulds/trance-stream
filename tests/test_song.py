@@ -381,3 +381,22 @@ def test_kick_produces_periodic_transients(rendered_128):
     assert avg_peaks >= 2.0, (
         f"Kick transients per bar avg={avg_peaks:.1f} < 2.0 — kick may not be rendering"
     )
+
+
+# ---------------------------------------------------------------------------
+# notearp_to_midi — crash guard
+# ---------------------------------------------------------------------------
+
+def test_notearp_to_midi_empty_chord_returns_empty():
+    """notearp_to_midi() must return [] without raising on an empty chord.
+
+    A ZeroDivisionError was reported when chord_degrees=[] produces an empty
+    chord_midi list and the loop attempts idx % len([]).
+    """
+    from song.builder import build_song
+    from song.renderer import SongRenderer
+
+    song = build_song('sunrise', mood='uplifting', total_bars=4)
+    renderer = SongRenderer(song)
+    result = renderer.notearp_to_midi(bar=0, chord_degrees=[])
+    assert result == [], f"Expected [] for empty chord, got {result!r}"

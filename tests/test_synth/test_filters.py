@@ -92,6 +92,21 @@ def test_lpf2_attenuates_high_frequency():
     assert _rms(out) < 0.25 * _rms(sig)
 
 
+def test_lpf2_state_continuity():
+    """Filtering two half-buffers (with state) must equal filtering the full buffer."""
+    sig = _sine_tone(440)
+    half = N // 2
+
+    full_out, _ = lpf2(sig, 1000, 1.0, SR)
+
+    half1_out, zi = lpf2(sig[:half], 1000, 1.0, SR)
+    half2_out, _ = lpf2(sig[half:], 1000, 1.0, SR, zi=zi)
+
+    stitched = np.concatenate([half1_out, half2_out])
+    diff = np.abs(full_out.astype(np.float64) - stitched.astype(np.float64))
+    assert diff.max() < 1e-5, f"lpf2 state-continuity error: {diff.max():.2e}"
+
+
 # ---------------------------------------------------------------------------
 # State continuity
 # ---------------------------------------------------------------------------

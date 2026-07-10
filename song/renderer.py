@@ -506,8 +506,12 @@ class SongRenderer:
         """
         from song.theory import SA_NOTEARP_PATTERN, chord_to_midi
         from song.arcs import chord_state_at
+        if not chord_degrees:
+            return []
         _, _, effective_root = chord_state_at(bar, self.song)
         chord_midi = chord_to_midi(chord_degrees, effective_root, self.song.scale)
+        if not chord_midi:
+            return []
         notes = []
         for idx in SA_NOTEARP_PATTERN:
             if idx >= 0:

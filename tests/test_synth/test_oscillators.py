@@ -44,9 +44,13 @@ def test_sawtooth_returns_phase_in_unit_interval():
 
 
 def test_sawtooth_phase_continuity():
-    """Calling sawtooth twice with phase continuity must not produce a seam jump."""
-    buf1, end_phase = sawtooth(440, ONE_SECOND // 2, SR)
-    buf2, _ = sawtooth(440, ONE_SECOND // 2, SR, phase=end_phase)
+    """Calling sawtooth twice with phase continuity must not produce a seam jump.
+
+    Uses 441 Hz (non-exact-cycle at 22050 samples) so the seam has genuine
+    non-zero phase — avoids a false pass when both buffers happen to end/start at 0.
+    """
+    buf1, end_phase = sawtooth(441, ONE_SECOND // 2, SR)
+    buf2, _ = sawtooth(441, ONE_SECOND // 2, SR, phase=end_phase)
     seam_diff = abs(float(buf1[-1]) - float(buf2[0]))
     # Consecutive samples near the seam should be smooth (no discontinuity).
     assert seam_diff < 0.1, f"Seam discontinuity {seam_diff:.4f} exceeds threshold"

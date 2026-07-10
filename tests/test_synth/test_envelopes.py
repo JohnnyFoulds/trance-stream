@@ -97,7 +97,7 @@ def test_trancegate_smooth():
     samples_per_bar = 75600
     env = trancegate(samples_per_bar, SR, samples_per_bar)
     max_jump = float(np.abs(np.diff(env.astype(np.float64))).max())
-    assert max_jump <= 0.05, f"Max adjacent jump {max_jump:.5f} exceeds 0.05"
+    assert max_jump <= 0.0006, f"Max adjacent jump {max_jump:.6f} exceeds 0.0006 (raised-cosine max is ~0.000062)"
 
 
 def test_trancegate_cycle_count_with_speed_1_5():
