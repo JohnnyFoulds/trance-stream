@@ -77,17 +77,15 @@ This applies universally:
 3. If PASS: report to the user with the evidence.
 4. If FAIL: iterate — do not ask the user to test a broken thing.
 
-## Project goal
+## Project vision and current goal
 
-**Make a Python script produce music that a trance listener — without being told it is generated — would believe is Switch Angel playing live.**
+**Ultimate goal: Death Angel** — a fully original AI live-coding trance entity with its own identity, style, and generative personality. Not a clone of anyone. Something new.
 
-Specifically:
-- Five voices: kick, bass, lead, arp, pad — all synthesised from math, no samples
-- SA's exact sound fingerprint: supersaw pad with dark filter, trancegate breathing, sidechain pumping on every kick, syncopated kick pattern, four-chord progression in G natural minor, 140 BPM
-- An arrangement arc (Intro → Groove → Breakdown → Build-up → Drop) that creates the emotional tension-and-release shape her sets have
-- DMCA-safe, deterministic from a seed, runs real-time on a laptop (numpy + sounddevice only)
+**Current phase: synthesise Switch Angel (SA).** SA is the vehicle, not the destination. Matching her sound precisely is the discipline that builds the full stack — synthesis, composition, arrangement, style parameterisation — needed to eventually build something original. SA gives us a concrete, measurable target so we are not just tuning parameters into the void.
 
-The acceptance bar is **BR-1** from `docs/feature-spec.md`: a listener familiar with trance identifies the output as Switch Angel's style within 15 seconds, without knowing it is procedurally generated.
+**Current acceptance bar (SA phase):** a listener familiar with trance identifies the output as Switch Angel's style within 15 seconds, without knowing it is procedurally generated (BR-1, `docs/feature-spec.md`).
+
+Design note: keep SA-specific constants isolated in `song/theory.py`. When a constant is SA-specific scaffolding rather than a general synthesis principle, note it — those are the values that will be replaced when we move to Death Angel's own style.
 
 ## Synthesis targets
 

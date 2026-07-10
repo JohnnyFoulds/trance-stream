@@ -9,7 +9,17 @@ DMCA-safe.
 
 ---
 
-## Goal
+## Vision
+
+**The ultimate goal is Death Angel** — a fully original AI live-coding trance entity with its own identity, style, and generative personality.
+
+Switch Angel (SA) is the current focus because she provides a concrete, measurable target. Matching her sound precisely is the discipline that builds the full stack: synthesis, composition, arrangement, and style parameterisation. Once we can convincingly reproduce SA's output from first principles, everything needed to build something original is in place.
+
+SA is the vehicle. Death Angel is the destination.
+
+---
+
+## Current goal (SA phase)
 
 **Make a listener familiar with trance believe they are hearing Switch Angel playing live — without knowing the music is procedurally generated.**
 
