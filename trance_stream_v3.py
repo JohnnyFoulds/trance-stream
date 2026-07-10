@@ -80,18 +80,29 @@ def main():
     parser.add_argument("--mute", nargs="+", metavar="TRACK",
                         help="Mute one or more tracks. "
                              "Track names: kick pad lead bass hihat clap pulse")
+    parser.add_argument("--style", default=None,
+                        choices=["hey_angel"],
+                        help="Style variant (default: procedural trance). "
+                             "hey_angel: half-time kick, bass portamento G1→F2, "
+                             "C4→F#3 chromatic melody, high pluck E5, deep sidechain.")
     args = parser.parse_args()
 
     n_bars = args.bars if args.bars is not None else (None if args.stream else 128)
-    print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
-          f"bpm={args.bpm}  bars={'∞' if n_bars is None else n_bars}")
 
     # Build song
     print("Building song...")
     t0 = time.time()
-    from song.builder import build_song
-    song = build_song(args.seed, mood=args.mood, bpm=args.bpm,
-                      total_bars=n_bars or 128)
+    if args.style == 'hey_angel':
+        from song.builder import build_hey_angel_song
+        song = build_hey_angel_song(total_bars=n_bars or 128)
+        print(f"trance_stream_v3  style=hey_angel  bpm={song.bpm}  "
+              f"bars={'∞' if n_bars is None else n_bars}")
+    else:
+        print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
+              f"bpm={args.bpm}  bars={'∞' if n_bars is None else n_bars}")
+        from song.builder import build_song
+        song = build_song(args.seed, mood=args.mood, bpm=args.bpm,
+                          total_bars=n_bars or 128)
     print(f"  root={_midi_name(song.root_midi)}  "
           f"scale={_scale_name(song.scale)}  "
           f"tracks={[t.instrument_type for t in song.tracks]}")

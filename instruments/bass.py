@@ -31,7 +31,9 @@ class AcidBass:
                cutoff_slider: float = 0.45,
                gain: float = None,
                portamento_s: float = 0.0,
-               target_midi: int = None) -> tuple:
+               target_midi: int = None,
+               vca_tau: float = 0.075,
+               bypass_acidenv: bool = False) -> tuple:
         """Render one bass note for n_samples.
 
         Parameters
@@ -96,33 +98,37 @@ class AcidBass:
             samples, self._osc_phase = sawtooth(freq_hz, n_samples, self.sr,
                                                 phase=self._osc_phase)
 
-        # VCA: percussive amplitude envelope (3ms attack, 75ms exponential decay).
+        # VCA: 3ms attack, then exponential decay with caller-specified tau.
+        # Default tau=0.075s → percussive; pass vca_tau>1.0 for held drone notes.
         t = np.arange(n_samples, dtype=np.float32) / self.sr
         vca_attack_s = 0.003
-        vca_tau = 0.075
         vca = np.where(t < vca_attack_s,
                        t / vca_attack_s,
                        np.exp(-(t - vca_attack_s) / vca_tau))
         samples = samples * vca.astype(np.float32)
 
-        # acidenv modulates LP cutoff: 3ms attack, exponential decay.
-        env = acidenv(n_samples, self.sr, amount=0.65)
+        if bypass_acidenv:
+            # Simple static LPF — no resonance, no sweep.  For sustained drone notes.
+            samples, _ = lpf2(samples, cutoff, q=0.7, sr=self.sr, zi=None)
+        else:
+            # acidenv modulates LP cutoff: 3ms attack, exponential decay.
+            env = acidenv(n_samples, self.sr, amount=0.65)
 
-        # 64 fine filter segments — ~3ms each, transitions imperceptible.
-        base_hz = 80.0
-        n_segs  = 64
-        seg_len = max(1, n_samples // n_segs)
-        zi = None
-        for seg in range(n_segs):
-            s = seg * seg_len
-            if s >= n_samples:
-                break
-            e = (s + seg_len) if seg < (n_segs - 1) else n_samples
-            e = min(e, n_samples)
-            mid_val  = float(env[s + (e - s) // 2])
-            seg_cut  = base_hz + (cutoff - base_hz) * mid_val
-            seg_cut  = float(np.clip(seg_cut, 30.0, self.sr * 0.45))
-            samples[s:e], zi = lpf2(samples[s:e], seg_cut, q=2.5, sr=self.sr, zi=zi)
+            # 64 fine filter segments — ~3ms each, transitions imperceptible.
+            base_hz = 80.0
+            n_segs  = 64
+            seg_len = max(1, n_samples // n_segs)
+            zi = None
+            for seg in range(n_segs):
+                s = seg * seg_len
+                if s >= n_samples:
+                    break
+                e = (s + seg_len) if seg < (n_segs - 1) else n_samples
+                e = min(e, n_samples)
+                mid_val  = float(env[s + (e - s) // 2])
+                seg_cut  = base_hz + (cutoff - base_hz) * mid_val
+                seg_cut  = float(np.clip(seg_cut, 30.0, self.sr * 0.45))
+                samples[s:e], zi = lpf2(samples[s:e], seg_cut, q=2.5, sr=self.sr, zi=zi)
 
         out = (samples * g).astype(np.float32)
         return out, out.copy()

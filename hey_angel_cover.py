@@ -83,11 +83,13 @@ BASS_PATTERN = [
     (14, 53,   43, 2),   # F2 → G1 portamento sweep
 ]
 
-# Melody: C4 → F#3 chromatic glide (6 semitones, 15 sem/sec ≈ 0.4s)
-# Fires once per bar at step 0, glides for ~0.4s then rests
+# Melody: C4 → F#3 chromatic glide (6 semitones)
+# MIDI stem analysis (research/analysis/hey_angel_analysis.md §8):
+# "chromatic descend C4→F#3 (t=0–1.2s)" → 5 semitones/sec, NOT 15.
+# Fills ~69% of bar before resting; avoids dead silence per beat.
 MELODY_START  = 60   # C4
 MELODY_END    = 54   # F#3
-MELODY_GLIDE_S = 0.4  # seconds for the 6-semitone descent
+MELODY_GLIDE_S = 1.2  # seconds for the 6-semitone descent (from MIDI stem)
 
 # High pluck: E5, sustained the whole bar, filter-burst on attack
 PLUCK_NOTE = 76      # E5 = 660 Hz
@@ -129,9 +131,8 @@ class HeyAngelRenderer:
     def __init__(self, sr: int = SR, n_bars: int = 20):
         from instruments.drums import DrumKit
         from instruments.bass  import AcidBass
-        from instruments.lead  import AcidLead
         from instruments.pluck import HighPluck
-        from synth.effects     import Sidechain
+        from synth.effects     import Sidechain, SchroederReverb
         from song.theory       import GAIN_KICK, GAIN_BASS, GAIN_LEAD, GAIN_HIHAT
 
         self.sr    = sr
@@ -141,20 +142,23 @@ class HeyAngelRenderer:
         self._bar  = 0
         self.n_bars = n_bars
 
+        from instruments.smooth_lead import SmoothLead
+
         self._kit   = DrumKit(seed=42, sr=sr, kick_decay_s=0.25,
                                kick_pitch_floor=50.0)
         self._bass  = AcidBass(sr=sr)
-        # Smooth character: wider detune, slower acidenv — closer to the legato melody feel
-        self._lead  = AcidLead(root_midi=ROOT, sr=sr, character='smooth')
+        # Single filtered saw, no gate, no delay — matches Hey Angel's clean glide
+        self._lead  = SmoothLead(cutoff_hz=900.0, gain=0.55, sr=sr)
         self._pluck = HighPluck(sr=sr)
         self._sc    = Sidechain(depth=SIDECHAIN_DEPTH,
                                 attack_s=SIDECHAIN_ATTACK_S, sr=sr)
+        self._reverb = SchroederReverb(room_size=0.75, wet=0.40, sr=sr)
 
-        self._gain_kick  = GAIN_KICK
-        self._gain_bass  = GAIN_BASS
-        self._gain_lead  = GAIN_LEAD * 0.7    # melody is quieter than SA's full lead
-        self._gain_hihat = GAIN_HIHAT * 0.5   # subtle hats
-        self._gain_pluck = 0.5
+        self._gain_kick  = GAIN_KICK * 0.7
+        self._gain_bass  = GAIN_BASS * 0.20  # sub-bass — warm foundation, not dominant
+        self._gain_lead  = 0.40              # lower — reverb will fill the space
+        self._gain_hihat = GAIN_HIHAT * 1.0
+        self._gain_pluck = 0.14
 
         self._kick_spill_l = None
         self._kick_spill_r = None
@@ -233,12 +237,18 @@ class HeyAngelRenderer:
                 if n_smp <= 0:
                     continue
                 if target is not None:
+                    # Portamento sweep — no acid filter, just sweep
                     bl, br = self._bass.render(
                         note, n_smp, gain=self._gain_bass,
                         portamento_s=float(n_smp) / self.sr,
-                        target_midi=target)
+                        target_midi=target,
+                        vca_tau=2.0, bypass_acidenv=True)
                 else:
-                    bl, br = self._bass.render(note, n_smp, gain=self._gain_bass)
+                    # Held drone or F2 hit — sustained, warm sub-bass
+                    bl, br = self._bass.render(
+                        note, n_smp, gain=self._gain_bass,
+                        cutoff_slider=0.30,   # ~400Hz — keeps it sub-warm, not buzzy
+                        vca_tau=2.0, bypass_acidenv=True)
                 bass_l[onset:onset + n_smp] += bl
                 bass_r[onset:onset + n_smp] += br
             if kick_ref is not None:
@@ -246,21 +256,18 @@ class HeyAngelRenderer:
             mix_l += bass_l
             mix_r += bass_r
 
-        # ── Melody: C4 → F#3 chromatic glide, 15 sem/sec ────────────────────
+        # ── Melody: C4 → F#3 chromatic glide, once per bar, then rest ──────
         if active['melody']:
-            n_glide = min(int(MELODY_GLIDE_S * self.sr), spb)
-            ml, mr = self._lead.render(
-                [MELODY_START], n_glide,
-                bar_offset_samples=bar * spb,
-                samples_per_bar=spb,
-                cutoff_slider=0.52,   # ~1500 Hz — open but not harsh
-                portamento_s=MELODY_GLIDE_S,
-                target_midi=MELODY_END)
-            # Pad to full bar for sidechain (sidechain needs matching length)
             melody_l = np.zeros(spb, dtype=np.float32)
             melody_r = np.zeros(spb, dtype=np.float32)
-            melody_l[:n_glide] = ml * self._gain_lead
-            melody_r[:n_glide] = mr * self._gain_lead
+            # MIDI stem: descend t=0–1.2s, bar=1.74s → 0.54s natural rest at end
+            n_glide = min(int(MELODY_GLIDE_S * self.sr), spb)
+            ml, mr = self._lead.render(
+                MELODY_START, n_glide,
+                target_midi=MELODY_END,
+                gain=self._gain_lead)
+            melody_l[:n_glide] = ml
+            melody_r[:n_glide] = mr
             if kick_ref is not None:
                 melody_l, melody_r = self._sc.process(melody_l, melody_r, kick_ref)
             mix_l += melody_l
@@ -274,7 +281,8 @@ class HeyAngelRenderer:
             mix_l += pl
             mix_r += pr
 
-        # ── Master: soft clip ─────────────────────────────────────────────────
+        # ── Master: reverb → soft clip ────────────────────────────────────────
+        mix_l, mix_r = self._reverb.process(mix_l, mix_r)
         mix_l = np.tanh(mix_l).astype(np.float32)
         mix_r = np.tanh(mix_r).astype(np.float32)
 
