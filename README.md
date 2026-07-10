@@ -424,6 +424,36 @@ understand the target synthesis chain; all code is original.
 
 ---
 
+## Research and application value
+
+### What this project is actually doing
+
+At its core, this is **analysis-by-synthesis** — hypothesize a parametric model of a musical style, then falsify or refine it by comparing synthesized output against the original. That is a scientific method applied to music.
+
+### Research value
+
+**Computational musicology with teeth.** Most music analysis describes what it hears subjectively — "warm", "punchy", "euphoric". This process forces those descriptions into measurable, reproducible parameters: spectral centroid, sidechain depth ratios, filter sweep curves. That is a methodology contribution, not just a personal project.
+
+**Style as a mathematical object.** If you can fully parameterize a musical style without copying any audio, you have shown that *style* is separable from *content* in a formal sense. That has implications for copyright theory, generative music, and how we think about artistic identity.
+
+**Interpretable music generation.** The dominant paradigm in AI music (Suno, Udio, etc.) is latent-space black boxes. An analysis-by-synthesis approach produces something you can read, edit, and reason about. A trance generator where every parameter traces back to a measurement is the opposite of a black box — and far more useful for music producers who want control.
+
+**Verification methodology.** The discipline enforced here — measure first, no excuses for untested work — is itself a methodology. Most audio tools are evaluated by ear, which is unreproducible. Building a measurable acceptance bar (CLAP scores, spectral comparisons, RMS envelopes) is a transferable framework for the broader field.
+
+### Application value
+
+**Procedural audio at style fidelity.** Games and interactive media need music that adapts in real time. The ability to generate infinite variation within a precisely parameterized style — without licensing existing recordings — is commercially valuable and technically unsolved at this level of fidelity.
+
+**Live performance systems.** The Death Angel vision — a machine that *performs* rather than plays back — touches HCI and music technology research around agency, responsiveness, and what "live" means for a generative system.
+
+**Synthesis education.** Deconstructing a real, commercially successful sound into its constituent parameters is a far more motivating way to teach synthesis than abstract textbook examples. This project is an implicit curriculum.
+
+---
+
+The personal curiosity is the engine, but the output — a reproducible, measured, parametric model of a musical style — would stand on its own in a music information retrieval or music technology research context. The discipline imposed throughout (cite everything, measure everything, document everything) is exactly what separates a research contribution from a hobby project.
+
+---
+
 ## License
 
 Mozilla Public License 2.0.
