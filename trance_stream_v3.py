@@ -72,8 +72,8 @@ def main():
     parser.add_argument("--ascii-video", nargs='*', default=None, metavar="PATH",
                         help="Pre-rendered ASCII video frame file(s) to use as CA color overlay. "
                              "Multiple paths supported; press 'v' to cycle through them. "
-                             "If omitted, all tools/*_frames.txt files are auto-discovered. "
-                             "Only active with --viz --stream.")
+                             "If omitted or passed with no arguments, all ascii_videos/*.txt files "
+                             "are auto-discovered. Only active with --viz --stream.")
     parser.add_argument("--solo", nargs="+", metavar="TRACK",
                         help="Solo one or more tracks; all others are muted. "
                              "Track names: kick pad lead bass hihat clap pulse")
@@ -123,10 +123,15 @@ def main():
     wav_path  = args.wav  or (None if args.stream else "/tmp/trance_v3.wav")
     midi_path = args.out_midi or (None if args.stream else "/tmp/trance_v3.mid")
 
+    ascii_video_paths = args.ascii_video
+    if ascii_video_paths is None or ascii_video_paths == []:
+        import glob as _glob
+        ascii_video_paths = sorted(_glob.glob("ascii_videos/*.txt")) or None
+
     if args.stream:
         buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path,
                                     use_viz=args.viz,
-                                    ascii_video_paths=args.ascii_video)
+                                    ascii_video_paths=ascii_video_paths)
     else:
         print(f"Rendering {n_bars} bars...")
         buf_l, buf_r = renderer.render_bars(n_bars)
@@ -324,12 +329,13 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
 
         av_playlist = []
         if ascii_video_paths:
-            from ascii_video import load_frames as _load_av
+            from ascii_video import load_frames as _load_av, content_fill_ratio as _fill_ratio
             for path in ascii_video_paths:
                 frames, fps, w, h = _load_av(path)
                 if frames:
-                    av_playlist.append((frames, fps, w, h))
-                    print(f"  ASCII video: {len(frames)} frames @ {fps}fps  ({w}×{h})  {path}")
+                    fill = _fill_ratio(frames, w)
+                    av_playlist.append((frames, fps, w, h, fill))
+                    print(f"  ASCII video: {len(frames)} frames @ {fps}fps  ({w}×{h})  fill={fill:.0%}  {path}")
 
         viz = Visualiser(renderer.song, n_bars, ascii_video_playlist=av_playlist)
         viz.start()

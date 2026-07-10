@@ -17,6 +17,24 @@ import re
 from pathlib import Path
 
 
+def content_fill_ratio(frames: list[list[str]], width: int) -> float:
+    """Return the fraction of canvas width actually used by non-space content.
+
+    Samples up to 20 frames.  Used to distinguish full-frame art (ratio ≈ 1.0,
+    e.g. Bad Apple) from logo-on-canvas art (ratio < 1.0, e.g. Death Angel).
+    """
+    if not frames or width == 0:
+        return 1.0
+    step = max(1, len(frames) // 20)
+    max_col = 0
+    for frame in frames[::step]:
+        for row in frame:
+            stripped = row.rstrip()
+            if stripped.strip():
+                max_col = max(max_col, len(stripped))
+    return min(1.0, max_col / width)
+
+
 def load_frames(path: str) -> tuple[list[list[str]], int, int, int]:
     """Load a frame file and return (frames, fps, width, height).
 

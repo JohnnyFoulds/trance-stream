@@ -249,7 +249,7 @@ class Visualiser:
 
     @property
     def _current_av(self):
-        """Return (frames, fps, w, h) for the active video, or None."""
+        """Return (frames, fps, w, h, fill) for the active video, or None."""
         if self._av_playlist_idx < 0 or not self._av_playlist:
             return None
         return self._av_playlist[self._av_playlist_idx]
@@ -269,18 +269,21 @@ class Visualiser:
         except Exception:
             self._stdin_fd = None
 
-        # Auto-discover all *_frames.txt in the tools directory when no
-        # explicit playlist was provided via the constructor.
+        # Auto-discover all *.txt in ascii_videos/ when no explicit playlist
+        # was provided via the constructor.
         if not self._av_playlist:
             import glob
             tools_dir = os.path.dirname(os.path.abspath(__file__))
+            repo_dir = os.path.dirname(tools_dir)
             sys.path.insert(0, tools_dir)
             from ascii_video import load_frames
-            for path in sorted(glob.glob(os.path.join(tools_dir, '*_frames.txt'))):
+            from ascii_video import load_frames, content_fill_ratio
+            for path in sorted(glob.glob(os.path.join(repo_dir, 'ascii_videos', '*.txt'))):
                 try:
                     frames, fps, w, h = load_frames(path)
                     if frames:
-                        self._av_playlist.append((frames, fps, w, h))
+                        fill = content_fill_ratio(frames, w)
+                        self._av_playlist.append((frames, fps, w, h, fill))
                 except Exception:
                     pass
 
@@ -316,7 +319,7 @@ class Visualiser:
 
         av = self._current_av
         if av is not None:
-            av_frames, av_fps, _av_w, _av_h = av
+            av_frames, av_fps, _av_w, _av_h, _av_fill = av
             # Advance frame index by wall clock then do a full redraw
             now = time.monotonic()
             if self._ascii_video_start_time is None:
@@ -584,38 +587,52 @@ class Visualiser:
         av_scaled_w = av_scaled_h = 1
         av_w = av_h = 1   # overridden below when a video is active
         _cur_av = self._current_av
+        # Whether this video uses contain+transparent or cover+opaque rendering.
+        av_contain = False
+
         if _cur_av is not None:
-            _av_frames, _av_fps, av_w, av_h = _cur_av
+            _av_frames, _av_fps, av_w, av_h, av_fill = _cur_av
             frame_idx = self._ascii_video_frame_idx % len(_av_frames)
             av_frame = _av_frames[frame_idx]
 
-            # Cover mode: always fill the entire CA area, center-crop excess.
-            # No bars ever — every cell gets a video color. This is correct for
-            # an overlay texture: bars (uncovered cells) look worse than a crop.
-            # Cell ratio 0.5 cancels identically in both axes, so we work in
-            # plain char-count space: scale = max(ca_inner/src_w, ca_lines/src_h).
-            scale = max(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
-
-            av_scaled_w = max(ca_inner, int(av_w * scale))
-            av_scaled_h = max(ca_lines, int(av_h * scale))
-
-            # Center-crop offsets (into the scaled source)
-            av_col_src_start = (av_scaled_w - ca_inner) / 2.0
-            av_row_src_start = (av_scaled_h - ca_lines) / 2.0
+            # Full-frame art (fill ≥ 0.9, e.g. Bad Apple, Star Wars): cover mode.
+            #   Scale to fill the CA area, center-crop excess, space = opaque dim-blue.
+            # Logo art (fill < 0.9, e.g. Death Angel): contain mode.
+            #   Scale to fit entirely, center on both axes, space = transparent CA.
+            # Cell aspect ratio 0.5 cancels in both axes; work in char-count space.
+            if av_fill >= 0.9:
+                scale = max(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
+                av_scaled_w = max(ca_inner, int(av_w * scale))
+                av_scaled_h = max(ca_lines, int(av_h * scale))
+                av_col_src_start = (av_scaled_w - ca_inner) / 2.0
+                av_row_src_start  = (av_scaled_h - ca_lines) / 2.0
+            else:
+                av_contain = True
+                scale = min(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
+                av_scaled_w = max(1, int(av_w * scale))
+                av_scaled_h = max(1, int(av_h * scale))
+                av_col_src_start = -(ca_inner - av_scaled_w) / 2.0
+                av_row_src_start  = -(ca_lines - av_scaled_h) / 2.0
 
         def _av_colored_row(raw: str, display_row: int) -> str:
             """Color every cell in a CA row using the current video frame."""
             src_r = display_row + av_row_src_start
-            src_row_idx = min(int(src_r / av_scaled_h * av_h),
-                              av_h - 1)
+            if av_contain and (src_r < 0 or src_r >= av_scaled_h):
+                return f'{_DIM}{raw}{_RESET}'
+            src_row_idx = min(int(src_r / av_scaled_h * av_h), av_h - 1)
             src_line = av_frame[src_row_idx] if src_row_idx < len(av_frame) else ''
             chars = []
             for col_idx, ch in enumerate(raw):
                 src_c = col_idx + av_col_src_start
-                src_col_idx = min(int(src_c / av_scaled_w * av_w),
-                                  av_w - 1)
+                if av_contain and (src_c < 0 or src_c >= av_scaled_w):
+                    chars.append(f'{_DIM}{ch}{_RESET}')
+                    continue
+                src_col_idx = min(int(src_c / av_scaled_w * av_w), av_w - 1)
                 src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
-                chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
+                if av_contain and src_ch == ' ':
+                    chars.append(f'{_DIM}{ch}{_RESET}')
+                else:
+                    chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
             return ''.join(chars)
 
         ca_rendered = []

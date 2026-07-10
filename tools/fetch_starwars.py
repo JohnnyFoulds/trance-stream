@@ -5,7 +5,7 @@
 
 Downloads the canonical Simon Jansen asciimation from bhwang/ascii-star-wars,
 converts the 14-lines-per-frame format to the one-line-per-frame format used
-by ascii_video.py, and writes it to tools/starwars_15fps_67x13.txt.
+by ascii_video.py, and writes it to ascii_videos/starwars_15fps_frames.txt.
 
 Usage:
     python tools/fetch_starwars.py
@@ -18,7 +18,7 @@ from pathlib import Path
 SOURCE_URL = (
     "https://raw.githubusercontent.com/bhwang/ascii-star-wars/main/src/asciimation.txt"
 )
-DEFAULT_OUT = Path(__file__).parent / "starwars_15fps_frames.txt"
+DEFAULT_OUT = Path(__file__).parent.parent / "ascii_videos" / "starwars_15fps_frames.txt"
 
 FRAME_LINES = 14   # 1 timing line + 13 content rows per frame
 CONTENT_ROWS = 13

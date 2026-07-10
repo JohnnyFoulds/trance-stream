@@ -1,7 +1,7 @@
 """One-off download helper for the Bad Apple ASCII frame file.
 
 Downloads frames_30fps_60x32.txt from the backslashxx/bad-apple-ascii
-GitHub release and writes it to tools/bad_apple_frames.txt.
+GitHub release and writes it to ascii_videos/bad_apple_frames.txt.
 
 Usage:
     python tools/fetch_bad_apple.py
@@ -17,7 +17,7 @@ RELEASE_URL = (
     "https://raw.githubusercontent.com/backslashxx/bad-apple-ascii/magisk-module/bad_apple.zip"
 )
 TARGET_FILE = "frames_30fps_60x32.txt"
-DEFAULT_OUT = Path(__file__).parent / "bad_apple_frames.txt"
+DEFAULT_OUT = Path(__file__).parent.parent / "ascii_videos" / "bad_apple_frames.txt"
 
 
 def fetch(out_path: Path) -> None:

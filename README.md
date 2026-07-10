@@ -61,7 +61,7 @@ python trance_stream_v3.py [OPTIONS]
                         continues running; the video colours each cell. Press v
                         to cycle through the loaded videos and back to normal CA
                         colour mode.
-                        If omitted, all tools/*_frames.txt files are
+                        If omitted, all ascii_videos/*.txt files are
                         auto-discovered (Bad Apple + Star Wars when both are
                         present). Only active with --stream --viz.
 
@@ -240,10 +240,10 @@ Load specific files or a custom set:
 
 ```bash
 # One file only
-python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt
+python trance_stream_v3.py --stream --viz --ascii-video ascii_videos/bad_apple_frames.txt
 
 # Explicit playlist
-python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt tools/starwars_15fps_frames.txt
+python trance_stream_v3.py --stream --viz --ascii-video ascii_videos/bad_apple_frames.txt ascii_videos/starwars_15fps_frames.txt
 ```
 
 The overlay uses cover scaling: the video always fills the entire CA area with
