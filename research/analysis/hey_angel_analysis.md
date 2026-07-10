@@ -128,13 +128,18 @@ The sidechain duck is pronounced and rhythmically locked to the bass hits. The p
 
 | Feature | Target | Status |
 |---|---|---|
-| BPM | 138 (or 140) | trance_stream_v2 has 138 ✓ |
-| Root | G1 = 50Hz | ✓ in v2 |
-| Bass portamento | ~120 sem/sec → 0.1s glide | Not implemented |
-| Bass pattern | G1(quarter) F2(8th) sweep(8th) | Not implemented |
-| Slow-glide melody | Legato, 15 sem/sec, C4→F#3 | Not implemented — v2 has step arp |
-| High pluck | Filter-burst sine, E5, long sustain | Not implemented |
-| Sidechain | -11dB depth at trough | Measured at 0.08 in v2, target -11dB |
+| BPM | 138 | ✓ `build_hey_angel_song()` — bpm=138.0 |
+| Root | G1 = MIDI 43 / 49Hz | ✓ root_midi=43 |
+| Bass portamento | ~120 sem/sec → 0.1s glide | ✓ `AcidBass.render(portamento_s=, target_midi=)` |
+| Bass pattern | G1(quarter) F2(8th) sweep(8th) | ✓ renderer `style='hey_angel'` bass block |
+| Slow-glide melody | Legato, 15 sem/sec, C4→F#3 | ✓ `AcidLead.render(portamento_s=, target_midi=)` |
+| High pluck | Filter-burst sine, E5, long sustain | ✓ `instruments/pluck.py` — `HighPluck` |
+| Sidechain | -11dB depth at trough (depth=0.721) | ✓ `SIDECHAIN_DEPTH_HEY_ANGEL=0.721` |
+| Kick pattern | Half-time (steps 0, 8 only) | ✓ `KICK_STEPS_HALFTIME=[0,8]` |
+| Style routing | Separate rendering path | ✓ `song.style='hey_angel'` field |
+
+**Implementation commit**: `sidequest/pluck-arp-analysis` branch, 2026-07-10.
+**Validated with**: `tests/test_hey_angel_synthesis.py` (15 tests, all pass) and `tools/validate_hey_angel.py`.
 
 ---
 
