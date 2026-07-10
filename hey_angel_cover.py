@@ -147,25 +147,26 @@ class HeyAngelRenderer:
         from instruments.pad        import SupersawPad
         from song.theory            import GAIN_PAD, PAD_VOICING_OFFSETS
 
-        self._kit   = DrumKit(seed=42, sr=sr, kick_decay_s=0.25,
-                               kick_pitch_floor=50.0)
+        # OPT-002: CMA-ES best params (CLAP=0.6569, 4000 evals, centroid+band penalty)
+        self._kit   = DrumKit(seed=42, sr=sr, kick_decay_s=0.4991,
+                               kick_pitch_floor=53.109)
         self._bass  = AcidBass(sr=sr)
-        # Single filtered saw, no gate, no delay — matches Hey Angel's clean glide
-        self._lead  = SmoothLead(cutoff_hz=2400.0, gain=0.55, sr=sr)
+        self._lead  = SmoothLead(cutoff_hz=11444.58, gain=0.2318, sr=sr)
         self._pluck = HighPluck(sr=sr)
-        # G1 (MIDI 43) root pad with sub-bass voicing; cutoff_slider=0.593 → ~2563 Hz (SA lead_base)
-        self._pad   = SupersawPad(root_midi=43, cutoff_slider=0.593, sr=sr,
+        self._pad   = SupersawPad(root_midi=43, cutoff_slider=0.8612, sr=sr,
                                    voicing_offsets=PAD_VOICING_OFFSETS)
-        self._sc    = Sidechain(depth=SIDECHAIN_DEPTH,
+        self._sc    = Sidechain(depth=0.3788,
                                 attack_s=SIDECHAIN_ATTACK_S, sr=sr)
-        self._reverb = SchroederReverb(room_size=0.45, wet=0.20, sr=sr)
+        self._reverb = SchroederReverb(room_size=0.6307, wet=0.3706, sr=sr)
 
-        self._gain_kick  = GAIN_KICK * 0.40
-        self._gain_bass  = GAIN_BASS * 0.55  # F2 bass needs to be audible in chroma
-        self._gain_lead  = 0.35
-        self._gain_hihat = 1.40  # EXP-006: calibrated from 4k+ band deficit (0.3% → 9.3%)
-        self._gain_pluck = 0.16
-        self._gain_pad   = 1.50             # EXP-008: raised to fill 0-200 Hz sub-bass band
+        self._gain_kick       = 0.7576
+        self._gain_bass       = 0.1509
+        self._gain_lead       = 0.2318
+        self._gain_hihat      = 2.7877
+        self._gain_pluck      = 0.0333
+        self._gain_pad        = 4.9828
+        self._bass_cutoff_g1  = 0.6489
+        self._hihat_decay_s   = 0.0050
 
         self._kick_spill_l = None
         self._kick_spill_r = None

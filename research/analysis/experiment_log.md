@@ -623,3 +623,62 @@ python tools/compare_audio.py research/reference_audio/hey_angel_trimmed.wav /tm
 1. `tools/optimize_hey_angel.py` objective(): add centroid penalty term
 2. `tools/optimize_hey_angel.py` `_SPACE`: widen 6 bound-hitting dimensions
 3. Warm-start `CURRENT` column from OPT-001 `best_params.json` values
+
+---
+
+## OPT-002 — CMA-ES with centroid+band penalty, widened bounds
+
+**Date**: 2026-07-11  
+**Optimiser**: CMA-ES, ~4000 evals, σ₀=0.25, popsize=8, 15-dim space  
+**Loss function**: `score = CLAP − max(0, 0.85−band_e)×0.5 − (max(0, 0.70−centroid) + max(0, centroid−1.30))×0.5`  
+**Best eval CLAP** (during run): 0.6569 at final  
+**Bounds widened**: `pad_gain` 3.5→5.0, `lead_cutoff_hz` 8k→12k, `hihat_gain` lo 0.20→0.05, `bass_cutoff_g1` hi 0.60→0.75, `gain_pluck` lo 0.03→0.005, `hihat_decay_s` lo 0.02→0.005  
+**Warm start**: OPT-001 best params
+
+**Parameters applied** (from `best_params.json`):
+```
+lead_cutoff_hz    = 11444.58   pad_cutoff_slider = 0.8612
+lead_gain         = 0.2318     pad_gain          = 4.9828   ← near upper bound 5.0
+hihat_gain        = 2.7877     bass_cutoff_g1    = 0.6489
+reverb_room       = 0.6307     reverb_wet        = 0.3706
+sidechain_depth   = 0.3788     gain_kick         = 0.7576
+gain_bass         = 0.1509     gain_pluck        = 0.0333
+kick_decay_s      = 0.4991     kick_pitch_floor  = 53.109
+hihat_decay_s     = 0.0050
+```
+
+**Reproducible command**:
+```bash
+python hey_angel_cover.py --bars 16 --wav /tmp/ha_OPT002.wav
+python tools/compare_audio.py research/reference_audio/hey_angel_trimmed.wav /tmp/ha_OPT002.wav --bpm 140.0534
+```
+
+**Results**:
+
+| Metric | OPT-001 | OPT-002 | Delta | Pass? |
+|---|---|---|---|---|
+| clap_cosine | 0.582 | **0.622** | +0.040 | FAIL (< 0.70) |
+| spectral_centroid_ratio | 0.494 ✗ | **0.731** | +0.237 | **PASS** |
+| band_energy_cosine | 0.957 ✓ | **0.964** | +0.007 | PASS |
+| mfcc_cosine | 0.939 ✓ | **0.832** | −0.107 | PASS |
+
+**Overall**: FAIL — CLAP 0.622, gap to target = 0.078
+
+**Analysis**:
+
+The centroid penalty worked: centroid recovered from 0.494 → 0.731 (just inside the 0.70 lower bound). All three non-CLAP Tier-1 metrics now pass. The remaining blocker is CLAP alone.
+
+Progress across runs:
+| Run | Best eval CLAP | Gate CLAP | centroid | band_e | mfcc |
+|---|---|---|---|---|---|
+| EXP-018 baseline | 0.374 | 0.374 | PASS | PASS | FAIL |
+| OPT-001 | 0.635 | 0.582 | FAIL | PASS | PASS |
+| OPT-002 | 0.657 | **0.622** | **PASS** | **PASS** | **PASS** |
+
+OPT-002 is the first run where centroid, band_energy, and mfcc all pass simultaneously. The sole remaining gate is CLAP ≥ 0.70, currently 0.622.
+
+**CMA-ES ceiling diagnosis**: Two full 500-gen CMA-ES runs from different starting points and different loss functions both plateau in the 0.63–0.66 range. The 15-dim space (gain, cutoff, reverb, kick shape) has been thoroughly explored. The residual CLAP gap of ~0.08 is not bridgeable by mix-balance tuning alone.
+
+**Conclusion**: This is an architectural ceiling. The gap is in synthesis *character* — oscillator architecture (supersaw voice count, detune spread, unison) — not in the parameters currently in the search space. Phase 2 work required.
+
+**`hey_angel_cover.py` state after OPT-002**: OPT-002 params retained (all three non-CLAP gates pass — best state achieved so far).
