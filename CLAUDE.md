@@ -137,3 +137,34 @@ video file itself.  For logo-style art (e.g. Death Angel) where all content char
 same brightness tier, remap the source chars so that foreground glyphs → bright-tier
 characters (e.g. `#`) and background spaces → a distinct dark-tier character (e.g. `.` or
 space).  The renderer's color palette then produces natural contrast over the CA texture.
+
+---
+
+## Outstanding future work
+
+### bad_apple_cover.py trancegate regression (raised 2026-07-10)
+
+The binary trancegate introduced in commit `64b58a4` breaks `bad_apple_cover.py` — the
+smooth cosine gate is needed for continuous melody lines.  The current binary gate snaps
+hard between 0.3 and 1.0 at every 16th-note slot boundary, producing audible clicks ~10
+times per bar.  There is also a secondary BPM mismatch: `SupersawPad` at line 349 of
+`bad_apple_cover.py` is constructed without `bpm=`, defaulting to 140.0 instead of 138.
+
+**Reference audio:** `research/reference_audio/bad_apple_reference_175bbba.wav`
+Rendered from commit `175bbba` (last known-good state before the regression).  Use this
+WAV as the baseline when evaluating any proposed fix.
+
+**Regression report:** `docs/decisions/bad_apple_trancegate_regression.md`
+Full symptom description, both root causes, and the proposed fix are documented there.
+
+**Fix approach:**
+1. Add `gate_mode: str = 'binary'` parameter to `SupersawPad.__init__` and
+   `AcidLead.__init__`.  When `gate_mode='cosine'`, use the raised-cosine formula
+   (`floor=0.3, speed=1.5 cycles/bar`).  Default `'binary'` preserves SA trance behaviour
+   and all 213 tests must continue to pass.
+2. In `bad_apple_cover.py` line 349 (pad construction), pass `bpm=BPM, gate_mode='cosine'`.
+3. In `bad_apple_cover.py` lead construction (~line 353), pass `gate_mode='cosine'`.
+
+**How to verify:** render 32 bars, compare RMS envelope and spectrogram against the
+reference WAV using `python tools/compare_audio.py`.  The envelope must be smooth (no
+~107ms amplitude spikes); the full test suite must remain green.
