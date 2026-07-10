@@ -95,22 +95,33 @@ not sufficient if the centre/detuned mix ratio differs.
 
 ### Approach 2: Fix the SmoothLead oscillator architecture
 
-**Hypothesis**: SA's lead uses `.s("supersaw").unison(3).detune(0.3)` (3 voices, 0.3
+~~**Hypothesis**: SA's lead uses `.s("supersaw").unison(3).detune(0.3)` (3 voices, 0.3
 semitone spread) — a narrower, thinner supersaw than the pad. `SmoothLead` is currently
-a *single* filtered sawtooth. This is a structural mismatch. The optimiser compensated by
-pushing `lead_cutoff_hz` to 11444 Hz (open filter, bright single oscillator), but a single
-saw at any filter frequency has a different MFCC fingerprint than a 3-voice unison.
+a *single* filtered sawtooth. This is a structural mismatch.~~
 
-**What to change**:
-- Replace `SmoothLead`'s single sawtooth with a 3-voice supersaw (`saw_count=3, detune_cents=30`)
-- This is a code change to `instruments/smooth_lead.py`, not just a parameter change
+**RETRACTED 2026-07-11 — hypothesis was wrong.**
 
-**Risk**: This is an architectural change, not a parameter change. The bad_apple_cover.py
-regression risk is non-zero — `SmoothLead` is used there too. Must check.
+SA's `acid` register (the lead function) in `prebake.strudel` is:
+```js
+register('acid', (pat) => {
+  return pat.s('supersaw')
+    .detune(.5)
+    .unison(1)   // ← single voice
+    ...
+})
+```
+Verified directly from `github.com/switchangel/strudel-scripts/prebake.strudel` (line 504–506),
+confirmed identically in `allscripts(deprecated).js` (line 182–184).
 
-**Cost**: Low implementation effort. Requires new CMA-ES baseline measurement after change.
+`SmoothLead` as a *single* filtered sawtooth is **architecturally correct**. The `unison(3)`
+claim originated from `spinor`, a completely different wavetable synth in the same file.
+The detune value is also wrong: SA uses `detune(.5)` (50 cents), not 0.3 semitones.
 
-**Verdict**: High confidence this is correct per SA's Strudel source. Do this before OPT-003.
+One actionable finding: SA's acid lead uses `detune(.5)` — 50 cents. If `SmoothLead`'s
+detune is not 50 cents, that is worth checking and correcting, but it is a single parameter
+tweak, not an architectural change.
+
+**Verdict**: Do not implement. `SmoothLead` single-oscillator architecture is confirmed correct.
 
 ---
 
@@ -215,9 +226,10 @@ Check whether `HeyAngelRenderer.SchroederReverb` is applied after `SupersawPad.S
 If double-reverb confirmed, fix structurally and re-measure with `compare_audio.py`. This
 is potentially free CLAP gain with no optimisation needed.
 
-### Step 3 — Fix SmoothLead to 3-voice supersaw
-SA's confirmed lead is `unison(3).detune(0.3)`. Change `SmoothLead` before OPT-003. This
-requires a new pre-spec hypothesis and gate check, but the code change is small.
+### Step 3 — ~~Fix SmoothLead to 3-voice supersaw~~ (retracted)
+~~SA's confirmed lead is `unison(3).detune(0.3)`.~~ This step is removed — see Approach 2
+retraction above. `SmoothLead` single-oscillator is confirmed correct. Minor actionable:
+verify `SmoothLead` uses 50 cents detune (`detune(.5)` per SA's source), not 30 cents.
 
 ### Step 4 — OPT-003: expanded search space + widened bounds
 After Steps 2–3, run OPT-003 with:
