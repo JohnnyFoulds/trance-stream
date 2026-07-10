@@ -65,6 +65,23 @@ This project synthesises Switch Angel's trance style. All parameters should be t
 - Pad fundamental: ~48Hz (G1), matching SA's `n("0").add(-14).scale("g:minor")`.
 - Kick: TR-909 measurements — 285→50Hz pitch sweep, tau=31ms, decay_s=0.12.
 
+### The strudel debug tool is the authoritative source for parameter targets
+
+**Before setting any synthesis constant in the Python generator, measure it from SA's
+actual Strudel code running in `research/strudel_debug.html`.** Do not derive
+parameter values from the OCR'd vocabulary doc or the feature spec alone — those are
+secondary sources. The debug page runs the real code.
+
+The full workflow (when to use it, how to measure each parameter, how to compare
+against the generator's output) is documented in `research/STRUDEL_DEBUG_PAGE.md`.
+
+Priority parameters still to be measured and matched (in order of perceptual impact):
+1. Sidechain pump depth — `duckdepth(.6)` → expect duck ratio ~0.40; v2 has 0.08
+2. Trancegate breathing — smooth cosine, peak/trough > 5×; v2 uses binary LFSR
+3. Filter floor — `rlpf(0.5)` → centroid ~800–1,200 Hz; v2 starts at ~5 kHz
+4. Kick pattern — steps `[0,4,8,11,14]`; v2 uses `[0,4,8,12]`
+5. lpenv sweep shape — centroid rises over 60 ms per trigger
+
 ## No sample playback
 
 We do not use downloaded audio samples as playback assets in the generator. Reference samples (e.g. TR-909 kick WAV) are for measurement and parameter fitting only.
