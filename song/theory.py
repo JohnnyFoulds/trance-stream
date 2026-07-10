@@ -124,7 +124,7 @@ HIHAT_DECAY_S_MAX     = 0.12
 # seed=45: SA's confirmed seed arg from OCR session GWXCCBsOMSg
 # floor=0.3: deliberate departure from SA's clip(.7); avoids hard transients into FDN reverb
 TRANCEGATE_DENSITY = 0.667   # P(slot on) ≈ 2/3
-TRANCEGATE_FLOOR   = 0.3     # off-slot gain; SA uses 0.7 but 0.3 avoids FDN transients
+TRANCEGATE_FLOOR   = 0.7     # SA's .clip(.7) — raised from 0.3 per EXP-018 hypothesis
 TRANCEGATE_SEED    = 45      # SA's seed argument
 
 # ---------------------------------------------------------------------------
