@@ -7,9 +7,13 @@
 Finds the hey_angel_cover.py parameter vector θ that maximises CLAP cosine
 similarity to the reference audio. Uses CMA-ES (Hansen 2016).
 
-CLAP internally clips all audio to 10 seconds before embedding. At 140 BPM,
-8 bars = 13.7s so CLAP always receives 10s of real content from both ref and
-gen — no silence padding, no length-mismatch penalty.
+CLAP runs with enable_fusion=True, processing the full N_BARS=16 render (~27.4s)
+in overlapping 10s windows pooled to a single embedding. This matches the full
+reference (hey_angel_trimmed.wav, 26.6s).
+
+Loss: score = CLAP(ref, gen) − band_energy_penalty − centroid_penalty
+  band_energy_penalty  = max(0, 0.85 − band_e) × 0.5
+  centroid_penalty     = (max(0, 0.70 − centroid) + max(0, centroid − 1.30)) × 0.5
 
 Usage
 -----
@@ -52,22 +56,23 @@ N_BARS  = 16  # 16 bars = 27.4s at 140 BPM ≈ 26.6s reference; fusion CLAP proc
 # ── parameter space ───────────────────────────────────────────────────────────
 
 # Each entry: (name, lo, hi, current_best)
+# OPT-002: widened 6 bound-hitting dims from OPT-001; warm-start from OPT-001 best
 _SPACE = [
-    ('lead_cutoff_hz',   300.0,  8000.0, 2400.0),
-    ('lead_gain',          0.05,    0.70,    0.35),
-    ('pad_cutoff_slider',  0.35,    0.75,  0.593),
-    ('pad_gain',           0.30,    3.50,    1.50),
-    ('hihat_gain',         0.20,    3.00,    1.40),
-    ('bass_cutoff_g1',     0.18,    0.60,    0.38),
-    ('reverb_room',        0.20,    0.90,    0.45),
-    ('reverb_wet',         0.05,    0.45,    0.20),
-    ('sidechain_depth',    0.30,    0.95,   0.721),
-    ('gain_kick',          0.15,    0.80,    0.40),
-    ('gain_bass',          0.15,    0.70,   0.303),
-    ('gain_pluck',         0.03,    0.50,    0.16),
-    ('kick_decay_s',       0.10,    0.50,    0.25),
-    ('kick_pitch_floor',  30.0,    80.0,    50.0),
-    ('hihat_decay_s',      0.02,    0.15,    0.06),
+    ('lead_cutoff_hz',   300.0, 12000.0, 7863.23),   # widened hi 8000→12000
+    ('lead_gain',          0.05,    0.70,   0.2893),
+    ('pad_cutoff_slider',  0.35,    0.90,   0.7161),   # widened hi 0.75→0.90
+    ('pad_gain',           0.30,    5.00,   3.4991),   # widened hi 3.50→5.00
+    ('hihat_gain',         0.05,    3.00,   0.2007),   # widened lo 0.20→0.05
+    ('bass_cutoff_g1',     0.18,    0.75,   0.5922),   # widened hi 0.60→0.75
+    ('reverb_room',        0.20,    0.90,   0.2940),
+    ('reverb_wet',         0.05,    0.45,   0.2259),
+    ('sidechain_depth',    0.30,    0.95,   0.3954),
+    ('gain_kick',          0.15,    0.80,   0.7175),
+    ('gain_bass',          0.15,    0.70,   0.4249),
+    ('gain_pluck',         0.005,   0.50,   0.0371),   # widened lo 0.03→0.005
+    ('kick_decay_s',       0.10,    0.50,   0.1281),
+    ('kick_pitch_floor',  30.0,    80.0,   54.787),
+    ('hihat_decay_s',      0.005,   0.15,   0.0200),   # widened lo 0.02→0.005
 ]
 
 NAMES   = [s[0] for s in _SPACE]
@@ -133,12 +138,21 @@ def write_wav(path: str, audio_l: np.ndarray, audio_r: np.ndarray) -> None:
 
 # ── cheap spectral guard (no CLAP) ────────────────────────────────────────────
 
-def _band_energy_cosine(path: str) -> float:
+_REF_SR = 22050
+_REF_HOP = 512
+
+def _spectral_metrics(path: str) -> tuple[float, float]:
+    """Return (band_energy_cosine, centroid_ratio) for a generated file.
+
+    centroid_ratio = mean_centroid(gen) / mean_centroid(ref).
+    ref centroid measured from hey_angel_trimmed.wav = 2012 Hz at SR=22050.
+    """
     import librosa
     from scipy.spatial.distance import cosine as cosine_dist
-    SR2 = 22050; HOP = 512
+    SR2 = _REF_SR; HOP = _REF_HOP
     bands = [(0,200),(200,500),(500,1000),(1000,2000),(2000,4000),(4000,SR2//2)]
-    ref_vec = np.array([0.498, 0.136, 0.087, 0.083, 0.103, 0.093])  # EXP-000 reference
+    ref_band_vec  = np.array([0.498, 0.136, 0.087, 0.083, 0.103, 0.093])
+    ref_centroid_hz = 3422.0   # measured from hey_angel_trimmed.wav (librosa, SR=22050)
     y, _ = librosa.load(path, sr=SR2, mono=True)
     S = np.abs(librosa.stft(y, hop_length=HOP)) ** 2
     freqs = librosa.fft_frequencies(sr=SR2, n_fft=(S.shape[0]-1)*2)
@@ -147,9 +161,10 @@ def _band_energy_cosine(path: str) -> float:
         S[np.logical_and(freqs >= lo, freqs < hi)].sum() / total
         for lo, hi in bands
     ])
-    if gen_vec.sum() < 1e-9:
-        return 0.0
-    return float(1.0 - cosine_dist(ref_vec, gen_vec))
+    band_e = float(1.0 - cosine_dist(ref_band_vec, gen_vec)) if gen_vec.sum() > 1e-9 else 0.0
+    c_gen = librosa.feature.spectral_centroid(y=y, sr=SR2, hop_length=HOP)[0]
+    centroid_ratio = float(np.mean(c_gen) / ref_centroid_hz)
+    return band_e, centroid_ratio
 
 
 # ── objective ─────────────────────────────────────────────────────────────────
@@ -178,12 +193,15 @@ def objective(x: np.ndarray, n_bars: int = N_BARS) -> float:
         audio_l, audio_r = renderer.render_bars(n_bars)
         write_wav(TMP_WAV, audio_l, audio_r)
         clap  = clap_score(TMP_WAV)
-        band_e = _band_energy_cosine(TMP_WAV)
-        penalty = max(0.0, 0.70 - band_e) * 0.4
-        score = clap - penalty
+        band_e, centroid = _spectral_metrics(TMP_WAV)
+        # Band-energy penalty (prevents spectral shape collapse)
+        p_band = max(0.0, 0.85 - band_e) * 0.5
+        # Centroid penalty: enforce centroid_ratio ∈ [0.70, 1.30]
+        p_centroid = (max(0.0, 0.70 - centroid) + max(0.0, centroid - 1.30)) * 0.5
+        score = clap - p_band - p_centroid
     except Exception as exc:
         print(f"  [eval {i}] ERROR: {exc}")
-        clap = -1.0; score = -1.5
+        clap = -1.0; score = -1.5; centroid = 0.0; band_e = 0.0
 
     if _log_writer:
         row = {'iter': i, 'clap': round(clap, 5), 'score': round(score, 5)}

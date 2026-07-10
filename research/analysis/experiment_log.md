@@ -548,3 +548,78 @@ These are not minor caveats. Both limitations mean every CLAP number recorded in
 ---
 
 **Resolution plan**: Fix both issues together (single commit), re-run `--dry-run` to confirm baseline CLAP is higher than 0.527 (the EXP-016 value under broken conditions), then re-launch optimiser.
+
+---
+
+## OPT-001 — Apply CMA-ES best params (500-gen run, band-energy loss only)
+
+**Date**: 2026-07-10  
+**Optimiser**: CMA-ES, 4218 evals, σ₀=0.25, popsize=8, 15-dim space  
+**Loss function**: `score = CLAP(ref, gen) − max(0, 0.70 − band_energy_cosine) × 0.4`  
+**Best eval CLAP** (during run): 0.6348 at eval 3366  
+**Warm start**: EXP-018 params (TRANCEGATE_FLOOR=0.7 active in song/theory.py)
+
+**Parameters applied** (from `best_params.json`):
+```
+lead_cutoff_hz    = 7863.23   pad_cutoff_slider = 0.7161
+lead_gain         = 0.2893    pad_gain          = 3.4991   ← AT upper bound 3.50
+hihat_gain        = 0.2007    ← AT lower bound 0.20       bass_cutoff_g1   = 0.5922  ← AT upper bound 0.60
+reverb_room       = 0.2940    reverb_wet        = 0.2259
+sidechain_depth   = 0.3954    gain_kick         = 0.7175
+gain_bass         = 0.4249    gain_pluck        = 0.0371  ← near lower bound
+kick_decay_s      = 0.1281    kick_pitch_floor  = 54.787
+hihat_decay_s     = 0.0200   ← AT lower bound 0.02
+```
+
+**Reproducible command**:
+```bash
+python hey_angel_cover.py --bars 16 --wav /tmp/ha_OPT001.wav
+python tools/compare_audio.py research/reference_audio/hey_angel_trimmed.wav /tmp/ha_OPT001.wav --bpm 140.0534
+```
+
+**Results**:
+
+| Metric | EXP-018 baseline | OPT-001 | Delta | Pass? |
+|---|---|---|---|---|
+| clap_cosine | 0.374 | **0.582** | +0.208 | FAIL (< 0.70) |
+| spectral_centroid_ratio | 0.976 ✓ | **0.494** | −0.482 | **FAIL** |
+| band_energy_cosine | 0.861 ✓ | **0.957** | +0.096 | PASS |
+| mfcc_cosine | 0.797 | **0.939** | **+0.142** | **PASS** |
+
+**Overall**: FAIL — centroid_ratio crashed to 0.494
+
+**Analysis**:
+
+1. **mfcc plateau is broken**: mfcc_cosine jumped 0.797 → 0.939. The 0.797 plateau across EXP-010–EXP-018 was NOT an architectural ceiling — it was addressable by the parameter space. The optimiser found a valid solution at `pad_gain=3.50, lead_cutoff_hz=7863`.
+
+2. **Centroid regression root cause**: `pad_gain=3.50` (at upper bound) floods the mix with sub-bass, pulling spectral centroid to 0.494 (≈ half the reference's average brightness). The loss function has **no centroid penalty** — CMA-ES optimised CLAP + spectral shape but was blind to centroid.
+
+3. **6 parameters at/near bounds** (identified by `tools/plot_optimization.py`):
+   - `pad_gain`: AT 3.50 upper — wants to go higher
+   - `lead_cutoff_hz`: near 8000 upper — wants to go higher
+   - `bass_cutoff_g1`: near 0.60 upper — wants to go higher
+   - `hihat_gain`: AT 0.20 lower — wants to go lower
+   - `gain_pluck`: near 0.03 lower — wants to go lower
+   - `hihat_decay_s`: AT 0.02 lower — wants to go lower
+
+   Bound-hitting is a strong signal: the optimiser needs a wider search space AND a centroid constraint to prevent centroid collapse.
+
+**Conclusion**: Need OPT-002 with:
+1. Add centroid penalty to loss function: `penalty += max(0, 0.70 − centroid_ratio) × K + max(0, centroid_ratio − 1.30) × K`
+2. Widen bounds on `pad_gain` (3.50→5.0), `lead_cutoff_hz` (8000→12000), `hihat_gain` (0.20→0.10), `hihat_decay_s` (0.02→0.01), `bass_cutoff_g1` (0.60→0.70), `gain_pluck` (0.03→0.01)
+3. Warm-start from OPT-001 best params
+
+**`hey_angel_cover.py` state after OPT-001**: Reverted to EXP-018 params (OPT-001 params not retained — centroid failure).
+
+---
+
+## OPT-002 — Pre-specification (pending)
+
+**Hypothesis**: Adding a centroid_ratio penalty to the CMA-ES objective and widening bounds on 6 bound-hitting parameters will allow CMA-ES to find a solution where CLAP ≥ 0.70, centroid ∈ [0.70, 1.30], band_energy ≥ 0.85, and mfcc ≥ 0.80 simultaneously.
+
+**Falsification criterion**: If after 500 generations CLAP < 0.70 with all other Tier-1 metrics passing, then the CLAP gap is in oscillator architecture (supersaw character, saw_count, detune), not addressable by the current 15-dim parameter space.
+
+**Changes required before running OPT-002**:
+1. `tools/optimize_hey_angel.py` objective(): add centroid penalty term
+2. `tools/optimize_hey_angel.py` `_SPACE`: widen 6 bound-hitting dimensions
+3. Warm-start `CURRENT` column from OPT-001 `best_params.json` values
