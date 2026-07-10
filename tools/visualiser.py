@@ -609,7 +609,11 @@ class Visualiser:
                 av_row_src_start  = (av_scaled_h - ca_lines) / 2.0
             else:
                 av_contain = True
-                scale = min(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
+                # Scale logo to 75% of the CA area so it has padding on all sides.
+                # The remaining 25% margin fills with _av_color(' ') = dim-blue,
+                # matching the logo's own background for a coherent canvas.
+                _LOGO_FILL = 0.75
+                scale = min(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1)) * _LOGO_FILL
                 av_scaled_w = max(1, int(av_w * scale))
                 av_scaled_h = max(1, int(av_h * scale))
                 av_col_src_start = -(ca_inner - av_scaled_w) / 2.0
@@ -622,16 +626,17 @@ class Visualiser:
             is always preserved.  See CLAUDE.md: 'colors only, never alter
             the display character'.
             """
+            _bg = _av_color(' ')   # dim-blue — used for all margin/background cells
             src_r = display_row + av_row_src_start
             if av_contain and (src_r < 0 or src_r >= av_scaled_h):
-                return f'{_DIM}{raw}{_RESET}'
+                return f'{_bg}{"".join(ch + _RESET + _bg for ch in raw)}{_RESET}'
             src_row_idx = min(int(src_r / av_scaled_h * av_h), av_h - 1)
             src_line = av_frame[src_row_idx] if src_row_idx < len(av_frame) else ''
             chars = []
             for col_idx, ch in enumerate(raw):
                 src_c = col_idx + av_col_src_start
                 if av_contain and (src_c < 0 or src_c >= av_scaled_w):
-                    chars.append(f'{_DIM}{ch}{_RESET}')
+                    chars.append(f'{_bg}{ch}{_RESET}')
                     continue
                 src_col_idx = min(int(src_c / av_scaled_w * av_w), av_w - 1)
                 src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
@@ -743,14 +748,25 @@ def _strip_ansi(s: str) -> str:
 
 # Characters ordered roughly by visual density (darkest → brightest).
 # Used to map ASCII video source pixels to ANSI brightness in overlay mode.
-_AV_DARK   = set(' .,`\'":;-_')
-_AV_MID    = set('!|/\\()[]{}+~?<>^*')
-_AV_BRIGHT = set('#@%MW&$X08B')
+# Four distinct tiers give a visible gradient in logo rain animations:
+#   space/background → dim-blue  (recedes into background)
+#   fade chars (.,)  → dim-cyan  (visible fade trail, distinct from background)
+#   mid chars (+|/)  → cyan      (active rain, bright mid-tone)
+#   solid chars (#@) → bold-white (logo body, maximum brightness)
+_AV_BACKGROUND = set(' ')
+_AV_FADE       = set('.,:;`\'"-_')
+_AV_MID        = set('!|/\\()[]{}+~?<>^*')
+_AV_BRIGHT     = set('#@%MW&$X08B')
+
+_DIM_BLUE = _DIM + '\033[34m'
+_DIM_CYAN = _DIM + '\033[36m'
 
 def _av_color(src_ch: str) -> str:
     """Map an ASCII video source character to an ANSI color code for overlay."""
     if src_ch in _AV_BRIGHT:
         return _BOLD + _WHITE
-    if src_ch in _AV_DARK:
-        return _DIM + '\033[34m'   # dim blue — dark regions recede
-    return _CYAN                   # mid chars get cyan
+    if src_ch in _AV_MID:
+        return _CYAN
+    if src_ch in _AV_FADE:
+        return _DIM_CYAN          # visible fade trail — distinct from background
+    return _DIM_BLUE              # space/background — recedes
