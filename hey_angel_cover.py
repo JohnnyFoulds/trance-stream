@@ -33,7 +33,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).parent
 sys.path.insert(0, str(REPO_ROOT))
 
-BPM  = 138.0
+BPM  = 140.0534
 SR   = 44100
 ROOT = 43          # G1 = MIDI 43 = 49 Hz
 
@@ -153,13 +153,13 @@ class HeyAngelRenderer:
         self._pluck = HighPluck(sr=sr)
         self._sc    = Sidechain(depth=SIDECHAIN_DEPTH,
                                 attack_s=SIDECHAIN_ATTACK_S, sr=sr)
-        self._reverb = SchroederReverb(room_size=0.75, wet=0.40, sr=sr)
+        self._reverb = SchroederReverb(room_size=0.45, wet=0.15, sr=sr)
 
-        self._gain_kick  = GAIN_KICK * 0.7
-        self._gain_bass  = GAIN_BASS * 0.20  # sub-bass — warm foundation, not dominant
-        self._gain_lead  = 0.40              # lower — reverb will fill the space
-        self._gain_hihat = GAIN_HIHAT * 1.0
-        self._gain_pluck = 0.14
+        self._gain_kick  = GAIN_KICK * 0.40
+        self._gain_bass  = GAIN_BASS * 0.55  # F2 bass needs to be audible in chroma
+        self._gain_lead  = 0.55              # melody is the dominant melodic element
+        self._gain_hihat = GAIN_HIHAT * 0.5  # hihats subtle in Hey Angel
+        self._gain_pluck = 0.16
 
         self._kick_spill_l = None
         self._kick_spill_r = None
@@ -195,6 +195,13 @@ class HeyAngelRenderer:
                 self._kick_spill_r = None
 
         kick_ref = None
+        kick_only = np.zeros(spb, dtype=np.float32)  # sidechain key — kick only
+
+        # 4-bar phrase structure:
+        # bar%4==2: energy dips in last ~200ms (pre-drop, before phrase boundary)
+        # bar%4==3: no bass/kick at step 0 (the actual phrase boundary rest)
+        is_pre_phrase = (bar % 4 == 2)
+        is_phrase_boundary = (bar % 4 == 3)
 
         # ── Kick (half-time) ─────────────────────────────────────────────────
         if active['kick']:
@@ -207,6 +214,7 @@ class HeyAngelRenderer:
                 n_in = end_bar - offset
                 mix_l[offset:end_bar] += kl[:n_in]
                 mix_r[offset:end_bar] += kr[:n_in]
+                kick_only[offset:end_bar] += kl[:n_in]
                 if offset + len(kl) > spb:
                     tail = spb - offset
                     new_spill_l[:len(kl) - tail] += kl[tail:]
@@ -216,17 +224,8 @@ class HeyAngelRenderer:
             if spill_len > 0:
                 self._kick_spill_l = new_spill_l[:spill_len]
                 self._kick_spill_r = new_spill_r[:spill_len]
-
-            # Sidechain key: short 20ms pulse on each kick step only.
-            # Using the full 400ms kick audio causes the IIR envelope follower to
-            # duck for the entire kick tail, crushing the inter-kick body.
-            pulse_len = max(1, int(0.02 * self.sr))
-            pulse = np.zeros(spb, dtype=np.float32)
-            for step in KICK_STEPS:
-                offset = step * sp16
-                end = min(offset + pulse_len, spb)
-                pulse[offset:end] = 1.0
-            kick_ref = pulse
+            # Sidechain triggered by kick only (not full mix — bass/hihat must not re-trigger)
+            kick_ref = kick_only
 
         # ── Hi-hat (simple 8th-note pattern) ─────────────────────────────────
         if active['hihat']:
@@ -239,67 +238,117 @@ class HeyAngelRenderer:
                 mix_r[onset:end] += hr[:n]
 
         # ── Bass: G1(quarter) → F2(eighth) → portamento F2→G1(eighth) ×2 ────
+        bass_l = np.zeros(spb, dtype=np.float32)
+        bass_r = np.zeros(spb, dtype=np.float32)
         if active['bass']:
-            bass_l = np.zeros(spb, dtype=np.float32)
-            bass_r = np.zeros(spb, dtype=np.float32)
             for step, note, target, dur in BASS_PATTERN:
+                # Phrase boundary: bass skips first half-note (steps 0-7).
+                # Sub-bass RMS at step0 ≈ 0.01 on phrase boundary bars (kick only, no bass).
+                if is_phrase_boundary and step < 8:
+                    continue
                 onset = step * sp16
                 n_smp = min(dur * sp16, spb - onset)
                 if n_smp <= 0:
                     continue
                 if target is not None:
-                    # Portamento sweep — no acid filter, just sweep
                     bl, br = self._bass.render(
                         note, n_smp, gain=self._gain_bass,
                         portamento_s=float(n_smp) / self.sr,
                         target_midi=target,
                         vca_tau=2.0, bypass_acidenv=True)
                 else:
-                    # Held drone or F2 hit — sustained, warm sub-bass
+                    # Narrow LPF on G1 drone to suppress G/G# harmonics in chroma.
+                    # rlpf_to_hz(0.25) = 81Hz — passes G1=49Hz, kills G2=98Hz+
+                    cutoff = 0.26 if note == 43 else 0.45
                     bl, br = self._bass.render(
                         note, n_smp, gain=self._gain_bass,
-                        cutoff_slider=0.30,   # ~400Hz — keeps it sub-warm, not buzzy
+                        cutoff_slider=cutoff,
                         vca_tau=2.0, bypass_acidenv=True)
                 bass_l[onset:onset + n_smp] += bl
                 bass_r[onset:onset + n_smp] += br
-            if kick_ref is not None:
-                bass_l, bass_r = self._sc.process(bass_l, bass_r, kick_ref)
-            mix_l += bass_l
-            mix_r += bass_r
 
-        # ── Melody: C4 → F#3 chromatic glide, sustain F#3 through end of bar ──
+        # ── Melody ────────────────────────────────────────────────────────────
+        # Analysis §8 MIDI: t=0–1.2s: chromatic glide C4→F#3;
+        # t=5.5–18s: F3/F2 sustained note (the dominant melody in trimmed reference).
+        # From bar 4 onward (original t≈8s) we should hold at F3 continuously.
+        melody_l = np.zeros(spb, dtype=np.float32)
+        melody_r = np.zeros(spb, dtype=np.float32)
         if active['melody']:
-            melody_l = np.zeros(spb, dtype=np.float32)
-            melody_r = np.zeros(spb, dtype=np.float32)
-            # Glide descends 1.2s, then sustain at F#3 for the remainder of the bar.
-            # Analysis §8: "F3/F2 sustained note (t=5.5–18s second half)" — the melody
-            # holds at the bottom note through the bar; no dead silence.
-            n_glide = min(int(MELODY_GLIDE_S * self.sr), spb)
-            ml, mr = self._lead.render(
-                MELODY_START, n_glide,
-                target_midi=MELODY_END,
-                gain=self._gain_lead)
-            melody_l[:n_glide] = ml
-            melody_r[:n_glide] = mr
-            n_sustain = spb - n_glide
-            if n_sustain > 0:
-                sl, sr_ = self._lead.render(
-                    MELODY_END, n_sustain,
+            # Analysis §8: trimmed reference starts at original t=6s, where the
+            # MIDI shows "F3/F2 sustained note (t=5.5–18s)". The dominant melody
+            # through the whole reference clip is F3 held, not the C4→F#3 glide.
+            # We still glide once at bar 0 to establish the gesture, then sustain.
+            # Reference (trimmed from t=6s) is in the "F3/F2 sustained" section.
+            # Every 4 bars, re-state the C4→F#3 glide then return to F3 sustain.
+            if bar % 4 == 0:
+                n_glide = min(int(MELODY_GLIDE_S * self.sr), spb)
+                ml, mr = self._lead.render(
+                    MELODY_START, n_glide,
+                    target_midi=MELODY_END,
                     gain=self._gain_lead)
-                melody_l[n_glide:] = sl
-                melody_r[n_glide:] = sr_
-            if kick_ref is not None:
-                melody_l, melody_r = self._sc.process(melody_l, melody_r, kick_ref)
-            mix_l += melody_l
-            mix_r += melody_r
+                melody_l[:n_glide] = ml
+                melody_r[:n_glide] = mr
+                n_sustain = spb - n_glide
+                if n_sustain > 0:
+                    sl, sr_ = self._lead.render(
+                        65, n_sustain,  # transition to F3
+                        gain=self._gain_lead)
+                    melody_l[n_glide:] = sl
+                    melody_r[n_glide:] = sr_
+            else:
+                # Sustained F3 (MIDI 65) and F#3 (MIDI 66) together — reference
+                # shows equal F and F# chroma prominence throughout the clip,
+                # consistent with two simultaneous voices or a slow tremolo.
+                sl_f3,  _ = self._lead.render(65, spb, gain=self._gain_lead * 0.7)
+                sl_fs3, _ = self._lead.render(66, spb, gain=self._gain_lead * 0.7)
+                raw_melody = sl_f3 + sl_fs3
+                melody_l[:] = raw_melody
+                melody_r[:] = raw_melody
 
-        # ── High pluck: E5, whole bar, filter-burst brightness ────────────────
+        # ── High pluck: E5, whole bar; also sustain D#4 for harmonic pad texture ─
+        pluck_l = np.zeros(spb, dtype=np.float32)
+        pluck_r = np.zeros(spb, dtype=np.float32)
         if active['pluck']:
-            pl, pr = self._pluck.render(PLUCK_NOTE, spb, gain=self._gain_pluck)
-            if kick_ref is not None:
-                pl, pr = self._sc.process(pl, pr, kick_ref)
-            mix_l += pl
-            mix_r += pr
+            pl_e5, pr_e5 = self._pluck.render(PLUCK_NOTE, spb, gain=self._gain_pluck)
+            # D#4/Eb4 (MIDI 63) — atmospheric pad from "other" stem; injects D# chroma
+            pl_eb4, pr_eb4 = self._pluck.render(63, spb, gain=self._gain_pluck * 0.5)
+            pluck_l = pl_e5 + pl_eb4
+            pluck_r = pr_e5 + pr_eb4
+
+        # Pre-phrase fade: at bar%4==2 (bar before a phrase boundary), reference energy
+        # drops ~200ms before bar end (ref RMS falls from 0.22 to 0.13 at t=697ms).
+        # Fade melody+bass+pluck from 1.0 to 0.35 in the last 220ms to match.
+        if is_pre_phrase:
+            fade_start = max(0, spb - int(0.22 * self.sr))
+            fade_len = spb - fade_start
+            if fade_len > 0:
+                fade_env = np.ones(spb, dtype=np.float32)
+                fade_env[fade_start:] = np.linspace(1.0, 0.35, fade_len, dtype=np.float32)
+                melody_l *= fade_env; melody_r *= fade_env
+                pluck_l  *= fade_env; pluck_r  *= fade_env
+                bass_l   *= fade_env; bass_r   *= fade_env
+
+        # ── Sidechain: apply once to the combined instrumental bus ───────────
+        # Apply sidechain to sum of all pitched layers before mixing with kick.
+        # One pass preserves the single pump per kick hit; multiple passes would
+        # triple-apply the gain reduction and distort the pump shape.
+        instr_l = bass_l + melody_l + pluck_l
+        instr_r = bass_r + melody_r + pluck_r
+        if kick_ref is not None:
+            instr_l, instr_r = self._sc.process(instr_l, instr_r, kick_ref)
+
+        mix_l += instr_l
+        mix_r += instr_r
+
+        # Phrase-boundary fade-in: at bar%4==3, the kick+bass are skipped at step0
+        # so the reference starts quiet (~0.14 vs 0.22 normal). Our melody+pluck
+        # keep the gen at ~0.20. Apply an exponential rise from 0.60 over 200ms
+        # to match the reference transition shape after the phrase boundary.
+        if is_phrase_boundary:
+            t_s = np.arange(spb, dtype=np.float32) / self.sr
+            tau = 0.15  # 150ms rise
+            env_pb = (1.0 - 0.35 * np.exp(-t_s / tau)).astype(np.float32)
+            mix_l *= env_pb; mix_r *= env_pb
 
         # ── Master: reverb → soft clip ────────────────────────────────────────
         mix_l, mix_r = self._reverb.process(mix_l, mix_r)
@@ -317,6 +366,26 @@ class HeyAngelRenderer:
         self._audio_l = all_l
         self._audio_r = all_r
         return np.concatenate(all_l), np.concatenate(all_r)
+
+    def render_bars_aligned(self, n: int, phase_offset_ms: float = 70.0) -> tuple:
+        """Render n bars with a phase offset to align kick to reference grid.
+
+        The reference hey_angel_trimmed.wav starts at t=6s of original, so its
+        first kick lands at t=70ms (not t=0ms). Prepend that many ms of the
+        tail of a "virtual" bar-0 to produce the correct phase alignment.
+        """
+        offset_samples = int(phase_offset_ms / 1000 * self.sr)
+        # Render n+1 bars, then slice out [offset_samples : offset_samples + n*spb]
+        all_l, all_r = [], []
+        for _ in range(n + 1):
+            l, r = self.render_bar()
+            all_l.append(l); all_r.append(r)
+        full_l = np.concatenate(all_l)
+        full_r = np.concatenate(all_r)
+        target_len = n * self._spb
+        self._audio_l = [full_l[offset_samples:offset_samples + target_len]]
+        self._audio_r = [full_r[offset_samples:offset_samples + target_len]]
+        return self._audio_l[0], self._audio_r[0]
 
     def write_wav(self, path: str) -> None:
         buf_l = np.concatenate(self._audio_l)
@@ -449,8 +518,8 @@ def main():
     p.add_argument('--viz',    action='store_true', help='Terminal CA visualiser')
     p.add_argument('--wav',    default=None,
                    help='Write WAV (default: hey_angel.wav when not streaming)')
-    p.add_argument('--bars',   type=int, default=20,
-                   help='Number of bars to render (default: 20 ≈ 35s)')
+    p.add_argument('--bars',   type=int, default=15,
+                   help='Number of bars to render (default: 15 ≈ 26s, matches reference length)')
     p.add_argument('--volume', type=float, default=1.0)
     args = p.parse_args()
 
