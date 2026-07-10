@@ -297,3 +297,27 @@ def test_donut_file_exists_and_fill_high():
     frames, _, w, _ = load_frames(str(matches[0]))
     ratio = content_fill_ratio(frames, w)
     assert ratio >= 0.9, f"Donut fill ratio {ratio:.3f} should be >= 0.9 for cover mode"
+
+
+def test_starfield_file_exists_and_fill_high():
+    """starfield_*.txt must exist in ascii_videos/ with fill ratio >= 0.9 (cover mode)."""
+    from ascii_video import load_frames, content_fill_ratio
+    matches = sorted(ASCII_VIDEOS_DIR.glob('starfield_*.txt'))
+    assert matches, (
+        "No starfield_*.txt found in ascii_videos/ — run: python tools/gen_starfield.py"
+    )
+    frames, _, w, _ = load_frames(str(matches[0]))
+    ratio = content_fill_ratio(frames, w)
+    assert ratio >= 0.9, f"Starfield fill ratio {ratio:.3f} should be >= 0.9 for cover mode"
+
+
+def test_plasma_file_exists_and_fill_high():
+    """plasma_*.txt must exist in ascii_videos/ with fill ratio >= 0.9 (cover mode)."""
+    from ascii_video import load_frames, content_fill_ratio
+    matches = sorted(ASCII_VIDEOS_DIR.glob('plasma_*.txt'))
+    assert matches, (
+        "No plasma_*.txt found in ascii_videos/ — run: python tools/gen_plasma.py"
+    )
+    frames, _, w, _ = load_frames(str(matches[0]))
+    ratio = content_fill_ratio(frames, w)
+    assert ratio >= 0.9, f"Plasma fill ratio {ratio:.3f} should be >= 0.9 for cover mode"
