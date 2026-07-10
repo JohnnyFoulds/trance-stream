@@ -20,38 +20,32 @@
   #status { color: #8EDF5F; padding: 6px 0; min-height: 22px; font-size: 13px; }
   #error  { color: #E91E63; padding: 4px 0; white-space: pre-wrap; font-size: 12px; min-height: 16px; }
   .note   { color: #666; font-size: 12px; margin-top: 8px; }
-  #tempo-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-  #tempo-row label { color: #aaa; font-size: 13px; }
   #bpm { background: #1a1a1a; color: #eee; border: 1px solid #444; padding: 4px 8px;
          font-family: monospace; width: 60px; }
 </style>
 </head>
 <body>
 <h1>Strudel Debug — SA Pad Reference</h1>
-<div id="status">Loading Strudel…</div>
+<div id="status">Loading…</div>
 <div id="error"></div>
-
-<div id="tempo-row">
-  <label>BPM: <input id="bpm" type="number" value="140" min="60" max="200"></label>
-  <button onclick="applyTempo()" style="padding:4px 12px;font-size:12px;">Apply Tempo</button>
+<div style="margin-bottom:12px;">
+  <label style="color:#aaa;font-size:13px;">BPM: <input id="bpm" type="number" value="140" min="60" max="200"></label>
 </div>
 
-<!-- ── Section 1: SA's pad alone ───────────────────────────────── -->
 <h2>1 — SA's Pad Only  (G minor, no kick)</h2>
 <div class="section">
 <textarea id="c1" rows="7">n("0").add(-14).scale("g:minor")
   .s("supersaw").unison(5).detune(.6)
   .trancegate(1.5, 45, 1)
-  .rlpf(0.5, 0.877)
+  .rlpf(0.5)
   .lpenv(2)
   .room(.7)
   .o(2)</textarea>
-<button onclick="playSnippet('c1')">▶ Play</button>
-<button class="stop" onclick="stopAll()">■ Stop</button>
+<button onclick="playSnippet('c1')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
 <div class="note">SA's exact pad code from video GWXCCBsOMSg — ground truth for pad timbre.</div>
 </div>
 
-<!-- ── Section 2: SA's pad + kick ──────────────────────────────── -->
 <h2>2 — SA's Pad + Kick  (G minor)</h2>
 <div class="section">
 <textarea id="c2" rows="10">stack(
@@ -59,94 +53,85 @@
   n("0").add(-14).scale("g:minor")
     .s("supersaw").unison(5).detune(.6)
     .trancegate(1.5, 45, 1)
-    .rlpf(0.5, 0.877)
+    .rlpf(0.5)
     .lpenv(2)
     .room(.7)
     .o(2)
 )</textarea>
-<button onclick="playSnippet('c2')">▶ Play</button>
-<button class="stop" onclick="stopAll()">■ Stop</button>
+<button onclick="playSnippet('c2')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
 <div class="note">Kick + pad — matches t=40s of video GWXCCBsOMSg.</div>
 </div>
 
-<!-- ── Section 3: Experiment (A minor) ─────────────────────────── -->
 <h2>3 — Experiment  (A minor — our key)</h2>
 <div class="section">
 <textarea id="c3" rows="7">n("0").add(-14).scale("a:minor")
   .s("supersaw").unison(5).detune(.6)
   .trancegate(1.5, 45, 1)
-  .rlpf(0.5, 0.877)
+  .rlpf(0.5)
   .lpenv(2)
   .room(.7)
   .o(2)</textarea>
-<button onclick="playSnippet('c3')">▶ Play</button>
-<button class="stop" onclick="stopAll()">■ Stop</button>
-<div class="note">Edit rlpf, lpenv, detune, add(-14) etc. Hit Play after each change.</div>
+<button onclick="playSnippet('c3')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Edit rlpf (0–1), lpenv, detune, add(-14) etc. Hit Play after each change.</div>
 </div>
 
 <script>
 const statusEl = document.getElementById('status');
 const errorEl  = document.getElementById('error');
 
-let _evaluate = null;
-let _hush     = null;
-// SA's custom functions fetched once from her GitHub repo
-let _prebake  = null;
-
 const PREBAKE_URL =
   'https://raw.githubusercontent.com/switchangel/strudel-scripts/main/prebake.strudel';
 
-async function loadPrebake() {
-  const res = await fetch(PREBAKE_URL);
-  if (!res.ok) throw new Error(`prebake fetch failed: ${res.status}`);
-  return await res.text();
-}
+// After initStrudel(), window.evaluate and window.hush are global functions.
+// We register SA's custom functions (trancegate, rlpf, .o(), etc.) by calling
+// window.evaluate(prebakeText) which runs in Strudel's scope where Pattern,
+// register, reify etc. are defined.
+// AudioContext starts suspended — no sound until first user click.
+
+let _repl    = null;
+let _ready   = false;
+
+// Expose internals for automated testing
+window.__debug = { get repl() { return _repl; }, get ready() { return _ready; } };
 
 (async () => {
   try {
-    statusEl.textContent = 'Loading Strudel…';
-    const [api, prebake] = await Promise.all([
+    const [repl, prebakeText] = await Promise.all([
       initStrudel(),
-      loadPrebake(),
+      fetch(PREBAKE_URL).then(r => { if (!r.ok) throw new Error('prebake fetch ' + r.status); return r.text(); }),
     ]);
-    _evaluate = api.evaluate;
-    _hush     = api.hush;
-    _prebake  = prebake;
-    // Bootstrap: run prebake once so all SA functions are registered
-    await _evaluate(_prebake);
-    statusEl.textContent = 'Ready — set BPM then click ▶ Play.';
-    applyTempo();
+    _repl = repl;
+    // Register SA's functions in Strudel's scope via window.evaluate.
+    // Append silence so the scheduler runs but emits nothing audible.
+    await window.evaluate(prebakeText + '\nsilence');
+    _ready = true;
+    statusEl.textContent = 'Ready — click Play.';
   } catch(e) {
-    statusEl.textContent = 'Failed to load.';
+    statusEl.textContent = 'Load error.';
     errorEl.textContent = e?.message || String(e);
     console.error(e);
   }
 })();
 
-window.applyTempo = function() {
-  const bpm = parseFloat(document.getElementById('bpm').value) || 140;
-  try {
-    if (typeof setCpm === 'function') { setCpm(bpm / 4); }
-    else if (typeof setcps === 'function') { setcps(bpm / 240); }
-  } catch(e) { console.warn('tempo setter:', e); }
-};
-
 window.stopAll = function() {
-  if (_hush) { try { _hush(); } catch(e) {} }
+  try { window.hush(); } catch(e) {}
   statusEl.textContent = 'Stopped.';
   errorEl.textContent = '';
 };
 
 window.playSnippet = async function(id) {
-  if (!_evaluate) { statusEl.textContent = 'Still loading…'; return; }
+  if (!_ready) { statusEl.textContent = 'Still loading…'; return; }
   const code = document.getElementById(id).value.trim();
   statusEl.textContent = 'Starting…';
   errorEl.textContent = '';
   try {
-    // Re-register SA functions then evaluate the snippet.
-    // evaluate() replaces the running pattern each call, so run both as one block.
-    await _evaluate(_prebake + '\n' + code);
-    applyTempo();
+    const bpm = parseFloat(document.getElementById('bpm').value) || 140;
+    _repl.setCps(bpm / 240);
+    // window.evaluate() is Strudel's global evaluator — runs in Strudel scope,
+    // custom functions already registered, AudioContext resumes on this gesture.
+    await window.evaluate(code);
     statusEl.textContent = 'Playing ▶';
   } catch(e) {
     statusEl.textContent = 'Error — see below.';
