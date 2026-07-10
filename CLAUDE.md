@@ -77,6 +77,18 @@ This applies universally:
 3. If PASS: report to the user with the evidence.
 4. If FAIL: iterate — do not ask the user to test a broken thing.
 
+## Project goal
+
+**Make a Python script produce music that a trance listener — without being told it is generated — would believe is Switch Angel playing live.**
+
+Specifically:
+- Five voices: kick, bass, lead, arp, pad — all synthesised from math, no samples
+- SA's exact sound fingerprint: supersaw pad with dark filter, trancegate breathing, sidechain pumping on every kick, syncopated kick pattern, four-chord progression in G natural minor, 140 BPM
+- An arrangement arc (Intro → Groove → Breakdown → Build-up → Drop) that creates the emotional tension-and-release shape her sets have
+- DMCA-safe, deterministic from a seed, runs real-time on a laptop (numpy + sounddevice only)
+
+The acceptance bar is **BR-1** from `docs/feature-spec.md`: a listener familiar with trance identifies the output as Switch Angel's style within 15 seconds, without knowing it is procedurally generated.
+
 ## Synthesis targets
 
 This project synthesises Switch Angel's trance style. All parameters should be traceable to measurements from her YouTube videos or her published code at github.com/switchangel/strudel-scripts.
@@ -96,12 +108,17 @@ secondary sources. The debug page runs the real code.
 The full workflow (when to use it, how to measure each parameter, how to compare
 against the generator's output) is documented in `research/STRUDEL_DEBUG_PAGE.md`.
 
-Priority parameters still to be measured and matched (in order of perceptual impact):
-1. Sidechain pump depth — `duckdepth(.6)` → expect duck ratio ~0.40; v2 has 0.08
-2. Trancegate breathing — smooth cosine, peak/trough > 5×; v2 uses binary LFSR
-3. Filter floor — `rlpf(0.5)` → centroid ~800–1,200 Hz; v2 starts at ~5 kHz
-4. Kick pattern — steps `[0,4,8,11,14]`; v2 uses `[0,4,8,12]`
-5. lpenv sweep shape — centroid rises over 60 ms per trigger
+### v3 parameter status (in order of perceptual impact)
+
+| # | Parameter | SA target | v3 code | Perceptual verification |
+|---|---|---|---|---|
+| 1 | Sidechain pump depth | `duckdepth(.6)` → duck ratio ~0.40 | `SIDECHAIN_DEPTH = 0.6` ✓ | **Not yet measured from v3 output** |
+| 2 | Trancegate shape | Smooth cosine, peak/trough > 5× | `synth/envelopes.py trancegate()` | **Not yet verified against SA reference** |
+| 3 | Filter floor | `rlpf(0.5)` → centroid ~800–1,200 Hz | `rlpf_to_hz` formula confirmed ✓ | **Not yet measured from v3 pad output** |
+| 4 | Kick pattern | Steps `[0,4,8,11,14]` | `KICK_STEPS_SYNCOPATED` ✓ | **Confirmed in code** |
+| 5 | lpenv sweep shape | Centroid rises over 60 ms per trigger | `instruments/pad.py lpenv` | **Not yet measured** |
+
+Items 1–3 and 5 are the remaining gap between structurally correct and perceptually convincing. The constants are right; the output measurements are missing.
 
 ## No sample playback
 

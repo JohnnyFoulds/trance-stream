@@ -9,6 +9,30 @@ DMCA-safe.
 
 ---
 
+## Goal
+
+**Make a listener familiar with trance believe they are hearing Switch Angel playing live — without knowing the music is procedurally generated.**
+
+The reference is Switch Angel (SA): a live-coder who builds trance tracks in real time using Strudel.cc. Her sound fingerprint has been reverse-engineered from OCR analysis of 311 code snapshots across 5 of her YouTube sessions. Every synthesis constant in this project traces back to a measurement from that source.
+
+The target sound requires getting five things right simultaneously:
+
+| Element | SA's approach | This project |
+|---|---|---|
+| **Pad** | 5-voice supersaw, very dark LP filter (~400 Hz), trancegate breathing, FDN reverb, sidechain pump | `instruments/pad.py` — full chain implemented |
+| **Kick** | TR-909 style: 285→50 Hz pitch sweep, tau=31 ms, decay 120 ms | `instruments/drums.py` — confirmed constants |
+| **Sidechain** | Pad/bass duck to ~40% on every kick; `.duckdepth(.6)` | `SIDECHAIN_DEPTH=0.6` in `song/theory.py` |
+| **Trancegate** | Smooth cosine pulse, 1.5 cycles/bar | `synth/envelopes.py` |
+| **Chord progression** | C min → D min → Eb maj → F maj (iv–v–bVI–bVII), 4 bars per chord, G natural minor at 140 BPM | `song/theory.py` — SA-confirmed values |
+
+### What is done and what remains
+
+The v3 architecture is structurally correct — all five voices exist, all SA-confirmed constants are in `song/theory.py`, and the arrangement arc (Intro → Groove → Breakdown → Build-up → Drop) is implemented. The remaining gap is **perceptual verification**: the output has not yet been measured against SA's reference for sidechain pump depth, trancegate shape, and filter floor. The constants are right; the measurements are missing.
+
+See `CLAUDE.md` for the prioritised list of parameters still needing output-level verification.
+
+---
+
 ## Quick start
 
 ```bash
