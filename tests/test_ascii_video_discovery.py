@@ -269,3 +269,31 @@ def test_cropped_logo_scales_up_to_fill_ca():
     assert scaled_w >= ca_inner - 1 or scaled_h >= ca_lines - 1, (
         f"Cropped logo doesn't scale to fill CA: scaled={scaled_w}x{scaled_h}, CA={ca_inner}x{ca_lines}"
     )
+
+
+# ---------------------------------------------------------------------------
+# New animation assets: Nyan Cat and spinning donut
+# ---------------------------------------------------------------------------
+
+def test_nyan_cat_file_exists_and_fill_high():
+    """nyan_cat_*.txt must exist in ascii_videos/ with fill ratio >= 0.9 (cover mode)."""
+    from ascii_video import load_frames, content_fill_ratio
+    matches = sorted(ASCII_VIDEOS_DIR.glob('nyan_cat_*.txt'))
+    assert matches, (
+        "No nyan_cat_*.txt found in ascii_videos/ — run: python tools/fetch_nyan_cat.py"
+    )
+    frames, _, w, _ = load_frames(str(matches[0]))
+    ratio = content_fill_ratio(frames, w)
+    assert ratio >= 0.9, f"Nyan Cat fill ratio {ratio:.3f} should be >= 0.9 for cover mode"
+
+
+def test_donut_file_exists_and_fill_high():
+    """donut_*.txt must exist in ascii_videos/ with fill ratio >= 0.9 (cover mode)."""
+    from ascii_video import load_frames, content_fill_ratio
+    matches = sorted(ASCII_VIDEOS_DIR.glob('donut_*.txt'))
+    assert matches, (
+        "No donut_*.txt found in ascii_videos/ — run: python tools/fetch_donut.py"
+    )
+    frames, _, w, _ = load_frames(str(matches[0]))
+    ratio = content_fill_ratio(frames, w)
+    assert ratio >= 0.9, f"Donut fill ratio {ratio:.3f} should be >= 0.9 for cover mode"
