@@ -26,6 +26,27 @@ should make it possible without re-doing the diagnosis. The standard is:
 | Architecture decisions | `docs/decisions/` |
 | Tool usage / CLI reference | inline in the tool file as module docstring |
 
+### Citation requirement — APA 7th edition
+
+**Any algorithm, model, dataset, or external technique referenced in a research document
+must be cited in APA 7th edition format.** This is non-negotiable.
+
+Format for journal articles:
+```
+Author, A. A., & Author, B. B. (Year). Title of article. Journal Name, Volume(Issue), pages. https://doi.org/xxx
+```
+Format for conference papers:
+```
+Author, A. A. (Year). Title of paper. In Proceedings of Conference Name (pp. x–x). Publisher. https://doi.org/xxx
+```
+Format for software/datasets:
+```
+Author, A. A. (Year). Name of software (Version x.x) [Software]. Publisher. URL or DOI
+```
+
+Required for (non-exhaustive list): PYIN, YIN, Demucs, HTDemucs, librosa, Karplus-Strong,
+Krumhansl-Schmuckler, spectral flux, MUSDB18, any neural network model used for analysis.
+
 ### Artifacts belong in the repo
 
 Any file referenced in methodology docs must be committed to the repo alongside

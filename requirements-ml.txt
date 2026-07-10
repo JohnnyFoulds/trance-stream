@@ -3,4 +3,5 @@
 # basic-pitch model ~50MB on first run
 demucs>=4.0.0
 basic-pitch>=0.3.0
-torchcodec
+torchcodec       # required by torchaudio for WAV save in demucs 4.0+
+pretty_midi>=0.2.11

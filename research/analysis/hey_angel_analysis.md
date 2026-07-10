@@ -29,11 +29,15 @@ In Strudel: `"x . . x . . . ."` at 16th resolution, cycled over 2 bars.
 
 | Parameter | Value |
 |---|---|
-| Root | G1 (50Hz) — same as SA's existing pad root |
-| Mode | **G Dorian** (G A Bb C D E F) |
-| Indicator | E natural (not Eb) in melody; strong G, F, D# in chroma; F# appears as leading/tritone color |
-| Top chroma | F#(0.842), F(0.687), D#(0.608) |
+| Root | G1 (49Hz) — confirmed by sub-bass FFT (full mix peak: 46–51Hz) |
+| Mode | **G minor / Dorian** — bass anchored on G1 |
+| Melody character | Chromatic descend: C4 → B3 → Bb3 → A3 → Ab3 → G3 → F#3 (6 semitones down, non-diatonic) |
+| Top chroma (full mix) | F#(0.842), F(0.687), D#(0.608), D(0.588), G(0.580) |
+| K-S key detection | "D# minor" (artefact — chromatic melody spreads energy across all PCs, defeating K-S) |
+| K-S on melody stem | "G major / F# major" — confirms G tonal centre despite chromatic decoration |
 | Harmonic/Percussive ratio | 1.63 (harmonic-dominant, as expected for a melodic piece) |
+
+**Key finding**: The Krumhansl-Schmuckler algorithm returns a spurious "D# minor" for the full mix because the chromatic descending line activates all 12 pitch classes equally, washing out the key signature. Analysis of the isolated Demucs melody stem (which places the K-S correlation on G major and F# major) alongside the confirmed G1 bass root establishes **G minor** as the correct key. The F# is a chromatic passing note / leading tone from the descend, not a scale member.
 
 ---
 
@@ -134,7 +138,36 @@ The sidechain duck is pronounced and rhythmically locked to the bass hits. The p
 
 ---
 
-## 8. Key synthesis questions (for sidequest implementation)
+## 8. Stem separation results (Demucs htdemucs_6s)
+
+Run on 2026-07-10. Stems committed to `research/reference_audio/stems/htdemucs_6s/hey_angel/`.  
+Demucs version 4.0.1; model `htdemucs_6s` (Défossez et al., 2021, 2022).
+
+| Stem | RMS | Notable content |
+|---|---|---|
+| drums | 0.1041 | Kick + hihat — good separation |
+| bass | 0.0926 | Sub-bass G1 (49Hz) — clean isolation |
+| other | 0.0496 | Atmospheric pad layer |
+| guitar | 0.0073 | Small — likely high pluck bleed |
+| vocals | 0.0640 | **Contains melody lead** — Demucs classified the synth lead as "vocals" (common for sustained tonal content) |
+| piano | 0.0003 | Negligible |
+
+**Key correction from stem analysis**: PYIN on the bass stem returned F1 (43.6Hz), but sub-bass FFT on both the full mix and the bass stem shows the true fundamental at 46–51Hz = G1 (49Hz). The F1 reading was a PYIN octave alias. G1 is confirmed.
+
+**Melody classification**: The synth lead was separated into the "vocals" stem. This is expected — Demucs HTDemucs_6s uses learned features that associate sustained mono pitch with vocals. The MIDI extracted from this stem correctly recovers the melody notes.
+
+### MIDI extracted from stems
+
+| Stem | MIDI file | Notes | Method |
+|---|---|---|---|
+| bass | `research/reference_audio/midi/hey_angel/bass.mid` | 100 | PYIN monophonic |
+| melody (vocals stem) | `research/reference_audio/midi/hey_angel/melody.mid` | ~270 | PYIN monophonic |
+
+The melody MIDI correctly captures: chromatic descend C4→F#3 (t=0–1.2s), high E5 pluck (t=3.1–4.0s), D#3→B2→G1 bass-register fall (t=4.0–4.5s), F3/F2 sustained note (t=5.5–18s second half). The MIDI contains the full note pitch trajectory including portamento glide — the note onsets correctly map each new pitch inflection.
+
+---
+
+## 9. Key synthesis questions (for sidequest implementation)
 
 1. **Is the melody a detuned saw with portamento or a sine with FM?**  
    The harmonic content (660Hz + 1300Hz ≈ 2nd harmonic only) suggests sine or near-sine, not saw. The portamento slide is pitch-based (glide), not FM.
