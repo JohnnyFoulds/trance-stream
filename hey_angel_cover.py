@@ -71,16 +71,19 @@ class HeyAngelSong:
 # Musical constants — all measured from hey_angel_analysis.md
 # ---------------------------------------------------------------------------
 
-# Bass pattern per bar — repeats twice (half-time feel, 2× per bar)
+# Bass pattern per bar — analysis §1: "3+5 sixteenth subdivision"
+# G1 hit at step 0, F2 hit at step 3, fast portamento F2→G1 at step 4,
+# then G1 continues through step 7 (no gap before next half-note).
 # Each entry: (step_16th, midi_note, target_midi_for_porta, n_sixteenths)
-# target_midi=None means no portamento (fixed pitch)
 BASS_PATTERN = [
-    ( 0, 43, None, 4),   # G1 quarter note
-    ( 4, 53, None, 2),   # F2 eighth
-    ( 6, 53,   43, 2),   # F2 → G1 portamento sweep (eighth)
-    ( 8, 43, None, 4),   # G1 quarter note (second half-note)
-    (12, 53, None, 2),   # F2 eighth
-    (14, 53,   43, 2),   # F2 → G1 portamento sweep
+    ( 0, 43, None, 3),   # G1: steps 0-2 (3 sixteenths = 326ms)
+    ( 3, 53, None, 1),   # F2: step 3 (1 sixteenth = 109ms)
+    ( 4, 53,   43, 1),   # F2→G1 portamento: step 4 (fast 109ms snap)
+    ( 5, 43, None, 3),   # G1 continue: steps 5-7 (fills to step 8)
+    ( 8, 43, None, 3),   # G1: steps 8-10
+    (11, 53, None, 1),   # F2: step 11
+    (12, 53,   43, 1),   # F2→G1 portamento: step 12
+    (13, 43, None, 3),   # G1 continue: steps 13-15
 ]
 
 # Melody: C4 → F#3 chromatic glide (6 semitones)
@@ -105,15 +108,13 @@ SIDECHAIN_ATTACK_S = 0.16
 # Arrangement sections
 # (start_bar, end_bar, kick, bass, melody, pluck, hihat)
 # ---------------------------------------------------------------------------
-# t=0.0–2.5s  (~bars 0-1): intro arp — melody only
-# t=2.5–3.1s  (~bar 1-2):  suspension — bass drone G1 only
-# t=3.1–4.0s  (~bar 2):    high pluck enters
-# t=4.0s+     (~bar 2+):   full groove
+# Reference (hey_angel_trimmed.wav) starts at t=6s of original — well into the groove.
+# That means it begins with full arrangement already running.
+# The analysis §3 arrangement is for the full track; when trimmed, we're at t=4.9s+
+# which is "GROOVE: F2 bass, G1 drone, rolling arp, sidechain pump active".
 SECTIONS = [
     # start  end  kick   bass   melody pluck  hihat
-    (0,    2,  False, False, True,  False, False),  # intro: melody only
-    (2,    3,  False, True,  False, True,  False),  # suspension+pluck
-    (3,    99, True,  True,  True,  True,  True ),  # full groove
+    (0,    99, True,  True,  True,  True,  True ),  # full groove from bar 0
 ]
 
 def _section_at(bar: int) -> dict:
@@ -215,7 +216,17 @@ class HeyAngelRenderer:
             if spill_len > 0:
                 self._kick_spill_l = new_spill_l[:spill_len]
                 self._kick_spill_r = new_spill_r[:spill_len]
-            kick_ref = mix_l.copy()
+
+            # Sidechain key: short 20ms pulse on each kick step only.
+            # Using the full 400ms kick audio causes the IIR envelope follower to
+            # duck for the entire kick tail, crushing the inter-kick body.
+            pulse_len = max(1, int(0.02 * self.sr))
+            pulse = np.zeros(spb, dtype=np.float32)
+            for step in KICK_STEPS:
+                offset = step * sp16
+                end = min(offset + pulse_len, spb)
+                pulse[offset:end] = 1.0
+            kick_ref = pulse
 
         # ── Hi-hat (simple 8th-note pattern) ─────────────────────────────────
         if active['hihat']:
@@ -256,11 +267,13 @@ class HeyAngelRenderer:
             mix_l += bass_l
             mix_r += bass_r
 
-        # ── Melody: C4 → F#3 chromatic glide, once per bar, then rest ──────
+        # ── Melody: C4 → F#3 chromatic glide, sustain F#3 through end of bar ──
         if active['melody']:
             melody_l = np.zeros(spb, dtype=np.float32)
             melody_r = np.zeros(spb, dtype=np.float32)
-            # MIDI stem: descend t=0–1.2s, bar=1.74s → 0.54s natural rest at end
+            # Glide descends 1.2s, then sustain at F#3 for the remainder of the bar.
+            # Analysis §8: "F3/F2 sustained note (t=5.5–18s second half)" — the melody
+            # holds at the bottom note through the bar; no dead silence.
             n_glide = min(int(MELODY_GLIDE_S * self.sr), spb)
             ml, mr = self._lead.render(
                 MELODY_START, n_glide,
@@ -268,6 +281,13 @@ class HeyAngelRenderer:
                 gain=self._gain_lead)
             melody_l[:n_glide] = ml
             melody_r[:n_glide] = mr
+            n_sustain = spb - n_glide
+            if n_sustain > 0:
+                sl, sr_ = self._lead.render(
+                    MELODY_END, n_sustain,
+                    gain=self._gain_lead)
+                melody_l[n_glide:] = sl
+                melody_r[n_glide:] = sr_
             if kick_ref is not None:
                 melody_l, melody_r = self._sc.process(melody_l, melody_r, kick_ref)
             mix_l += melody_l
