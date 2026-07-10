@@ -19,6 +19,7 @@ Design note on block size:
 from __future__ import annotations
 
 import numpy as np
+from scipy.signal import lfilter
 
 
 class FeedbackDelay:
@@ -292,9 +293,9 @@ class Sidechain:
         self, depth: float = 0.6, attack_s: float = 0.16, sr: int = 44100
     ) -> None:
         self._depth = float(depth)
-        self._release_s = float(attack_s)  # SA's .duckattack() is the release time
+        self._attack_s = float(attack_s)
         self._sr = sr
-        self._env = 0.0  # current envelope level [0, 1], persists across bars
+        self._env_state = np.zeros(1, dtype=np.float64)  # IIR filter state
 
     def process(
         self,
@@ -304,33 +305,25 @@ class Sidechain:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Apply sidechain ducking using kick_l as the key signal.
 
-        Instant attack (peak-hold per sample), exponential release with
-        time constant release_s.  SA's .duckattack(.16) controls recovery
-        speed, not attack — the duck is instantaneous on the kick transient.
-
-        State persists between calls so recovery is continuous across bars.
+        Rectifies kick_l to obtain an envelope, smooths it with a stateful
+        one-pole IIR (scipy lfilter with zi — state persists between calls
+        so sidechain recovery is continuous across bar boundaries).
 
         Returns (ducked_l, ducked_r).
         """
-        n = len(kick_l)
-        # Per-sample release coefficient: env decays by this factor each sample.
-        release = float(np.exp(-1.0 / (self._sr * self._release_s)))
+        kick_env = np.abs(kick_l).astype(np.float64)
 
-        kick_abs = np.abs(kick_l).astype(np.float64)
-        env_out = np.empty(n, dtype=np.float64)
-        e = self._env
-        for i in range(n):
-            # Instant attack: grab peak immediately; slow release afterward.
-            k = kick_abs[i]
-            if k > e:
-                e = k
-            else:
-                e *= release
-            env_out[i] = e
-        self._env = float(e)
+        # One-pole exponential follower: α = 1 − exp(−1 / (sr × τ)).
+        alpha = 1.0 - np.exp(-1.0 / (self._sr * self._attack_s))
+        b_coef = [alpha]
+        a_coef = [1.0, -(1.0 - alpha)]
+        kick_env_smooth, self._env_state = lfilter(
+            b_coef, a_coef, kick_env, zi=self._env_state)
+        kick_env_smooth = kick_env_smooth.astype(np.float32)
 
-        env_out = np.clip(env_out, 0.0, 1.0).astype(np.float32)
-        gain = (1.0 - self._depth * env_out).astype(np.float32)
+        kick_env_smooth = np.clip(kick_env_smooth, 0.0, 1.0)
+
+        gain = (1.0 - self._depth * kick_env_smooth).astype(np.float32)
         out_l = (signal_l * gain).astype(np.float32)
         out_r = (signal_r * gain).astype(np.float32)
         return out_l, out_r

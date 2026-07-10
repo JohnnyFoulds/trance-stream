@@ -102,7 +102,7 @@ def make_bar_info(bar_idx: int, song, render_ms: float, bar_dur_ms: float) -> Ba
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     from song.arcs import filter_cutoff_arc, fm_depth_arc, chord_state_at
-    from song.theory import rlpf_to_hz, chord_to_midi, TRANCEGATE_SPEED
+    from song.theory import rlpf_to_hz, chord_to_midi
 
     # Chord index — phase-aware, matches SongRenderer exactly
     prog, weights, effective_root = chord_state_at(bar_idx, song)
@@ -123,11 +123,10 @@ def make_bar_info(bar_idx: int, song, render_ms: float, bar_dur_ms: float) -> Ba
     filter_hz = rlpf_to_hz(slider)
     fm_depth = fm_depth_arc(bar_idx)
 
-    # Trancegate: where in the cycle are we at bar start?
-    # Phase = (bar_idx * spb) / gate_period_samples, mod 1.0
+    # Trancegate: binary gate model has no continuous phase.
+    # gate_phase is unused in display; keep at 0.0 for BarInfo compatibility.
     spb = int(song.sr * 4 * 60 / song.bpm)
-    gate_period = spb / TRANCEGATE_SPEED
-    gate_phase = (bar_idx * spb % gate_period) / gate_period
+    gate_phase = 0.0
 
     # Which tracks are active this bar?
     sb = song.stage_bars

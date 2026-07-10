@@ -144,22 +144,28 @@ class HeyAngelRenderer:
         self.n_bars = n_bars
 
         from instruments.smooth_lead import SmoothLead
+        from instruments.pad        import SupersawPad
+        from song.theory            import GAIN_PAD, PAD_VOICING_OFFSETS
 
         self._kit   = DrumKit(seed=42, sr=sr, kick_decay_s=0.25,
                                kick_pitch_floor=50.0)
         self._bass  = AcidBass(sr=sr)
         # Single filtered saw, no gate, no delay — matches Hey Angel's clean glide
-        self._lead  = SmoothLead(cutoff_hz=900.0, gain=0.55, sr=sr)
+        self._lead  = SmoothLead(cutoff_hz=2400.0, gain=0.55, sr=sr)
         self._pluck = HighPluck(sr=sr)
+        # G1 (MIDI 43) root pad with sub-bass voicing; cutoff_slider=0.593 → ~2563 Hz (SA lead_base)
+        self._pad   = SupersawPad(root_midi=43, cutoff_slider=0.593, sr=sr,
+                                   voicing_offsets=PAD_VOICING_OFFSETS)
         self._sc    = Sidechain(depth=SIDECHAIN_DEPTH,
                                 attack_s=SIDECHAIN_ATTACK_S, sr=sr)
-        self._reverb = SchroederReverb(room_size=0.45, wet=0.15, sr=sr)
+        self._reverb = SchroederReverb(room_size=0.45, wet=0.20, sr=sr)
 
         self._gain_kick  = GAIN_KICK * 0.40
         self._gain_bass  = GAIN_BASS * 0.55  # F2 bass needs to be audible in chroma
-        self._gain_lead  = 0.55              # melody is the dominant melodic element
-        self._gain_hihat = GAIN_HIHAT * 0.5  # hihats subtle in Hey Angel
+        self._gain_lead  = 0.35
+        self._gain_hihat = 1.40  # EXP-006: calibrated from 4k+ band deficit (0.3% → 9.3%)
         self._gain_pluck = 0.16
+        self._gain_pad   = 1.50             # EXP-008: raised to fill 0-200 Hz sub-bass band
 
         self._kick_spill_l = None
         self._kick_spill_r = None
@@ -259,7 +265,7 @@ class HeyAngelRenderer:
                 else:
                     # Narrow LPF on G1 drone to suppress G/G# harmonics in chroma.
                     # rlpf_to_hz(0.25) = 81Hz — passes G1=49Hz, kills G2=98Hz+
-                    cutoff = 0.26 if note == 43 else 0.45
+                    cutoff = 0.38 if note == 43 else 0.45
                     bl, br = self._bass.render(
                         note, n_smp, gain=self._gain_bass,
                         cutoff_slider=cutoff,
@@ -328,12 +334,21 @@ class HeyAngelRenderer:
                 pluck_l  *= fade_env; pluck_r  *= fade_env
                 bass_l   *= fade_env; bass_r   *= fade_env
 
+        # ── Pad: G minor root chord, sustained, all bars ──────────────────────
+        # Root chord = [G1 scale degree 0 and 4 = G1 + D2] in G natural minor.
+        # SA's pad plays sa_canonical progression but Hey Angel holds a static
+        # G minor root pad throughout. G=MIDI43, D=MIDI50 (5th above).
+        pad_l = np.zeros(spb, dtype=np.float32)
+        pad_r = np.zeros(spb, dtype=np.float32)
+        pl, pr = self._pad.render([43, 50], spb, gain=self._gain_pad)
+        pad_l += pl; pad_r += pr
+
         # ── Sidechain: apply once to the combined instrumental bus ───────────
         # Apply sidechain to sum of all pitched layers before mixing with kick.
         # One pass preserves the single pump per kick hit; multiple passes would
         # triple-apply the gain reduction and distort the pump shape.
-        instr_l = bass_l + melody_l + pluck_l
-        instr_r = bass_r + melody_r + pluck_r
+        instr_l = bass_l + melody_l + pluck_l + pad_l
+        instr_r = bass_r + melody_r + pluck_r + pad_r
         if kick_ref is not None:
             instr_l, instr_r = self._sc.process(instr_l, instr_r, kick_ref)
 

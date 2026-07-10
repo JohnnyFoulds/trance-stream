@@ -80,11 +80,6 @@ def trancegate(
     Per-bar patterns are reproducible given the same seed + bar index, matching
     Strudel's .rib(seed, length) behaviour.
 
-    SA's gate triggers note events rather than multiplying a continuous audio
-    stream, so transitions are naturally smooth (envelope attack/release).  We
-    approximate this with a 5 ms linear crossfade at each slot boundary to
-    eliminate broadband click transients from hard amplitude steps.
-
     floor=0.3 is a deliberate departure from SA's .clip(.7) = 0.7 amplitude on
     open slots; our lower floor avoids hard transients into the FDN reverb.
 
@@ -104,21 +99,6 @@ def trancegate(
         s = i * slot_len
         e = min((i + 1) * slot_len, samples_per_bar)
         env[s:e] = pattern[i]
-
-    # 5 ms linear crossfade at each slot boundary to eliminate click transients.
-    fade_len = min(int(0.005 * sr), slot_len // 4)
-    if fade_len > 1:
-        for i in range(1, n_slots):
-            boundary = i * slot_len
-            if boundary >= samples_per_bar:
-                break
-            v_prev = pattern[i - 1]
-            v_next = pattern[i]
-            if v_prev != v_next:
-                fade_start = max(0, boundary - fade_len // 2)
-                fade_end   = min(samples_per_bar, boundary + (fade_len - fade_len // 2))
-                n_fade = fade_end - fade_start
-                env[fade_start:fade_end] = np.linspace(v_prev, v_next, n_fade, dtype=np.float32)
 
     tiles_needed = (bar_offset + n_samples) // samples_per_bar + 2
     full = np.tile(env, tiles_needed)
