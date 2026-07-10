@@ -106,3 +106,19 @@ Priority parameters still to be measured and matched (in order of perceptual imp
 ## No sample playback
 
 We do not use downloaded audio samples as playback assets in the generator. Reference samples (e.g. TR-909 kick WAV) are for measurement and parameter fitting only.
+
+## ASCII video overlay rule — colors only, never alter the display character
+
+**The CA's `█`/`░` character texture must never be replaced or overwritten by overlay code.**
+Overlays work exclusively by changing ANSI color/brightness — the displayed character always
+comes from the CA state.  Violating this breaks the visual identity of the CA diagram.
+
+This rule applies everywhere in `visualiser.py` (and any future renderer): `_av_colored_row`
+and any successor must only prepend a color escape before `ch` (the CA char) and append
+`_RESET` after it.  It must never substitute a different character for `ch`.
+
+**How to fix contrast problems without breaking this rule:** pre-process the source ASCII
+video file itself.  For logo-style art (e.g. Death Angel) where all content chars map to the
+same brightness tier, remap the source chars so that foreground glyphs → bright-tier
+characters (e.g. `#`) and background spaces → a distinct dark-tier character (e.g. `.` or
+space).  The renderer's color palette then produces natural contrast over the CA texture.

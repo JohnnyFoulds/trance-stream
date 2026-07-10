@@ -616,14 +616,11 @@ class Visualiser:
                 av_row_src_start  = -(ca_lines - av_scaled_h) / 2.0
 
         def _av_colored_row(raw: str, display_row: int) -> str:
-            """Color every cell in a CA row using the current video frame.
+            """Color every CA cell using the video frame palette.
 
-            Cover mode (full-frame art): color the CA char with the video's
-            palette — the CA texture shows through.
-
-            Contain mode (logo art): render the source char itself so letter
-            shapes have inherent contrast.  Space → dim ░ background so the
-            logo reads as bright glyphs on dark, regardless of the CA state.
+            Only the ANSI color/brightness is changed; the CA character (ch)
+            is always preserved.  See CLAUDE.md: 'colors only, never alter
+            the display character'.
             """
             src_r = display_row + av_row_src_start
             if av_contain and (src_r < 0 or src_r >= av_scaled_h):
@@ -638,14 +635,8 @@ class Visualiser:
                     continue
                 src_col_idx = min(int(src_c / av_scaled_w * av_w), av_w - 1)
                 src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
-                if av_contain:
-                    if src_ch == ' ':
-                        # Dark background — show dim CA noise so the CA is still
-                        # faintly visible outside the actual glyphs.
-                        chars.append(f'{_DIM}░{_RESET}')
-                    else:
-                        # Render the source glyph itself for inherent contrast.
-                        chars.append(f'{_av_color(src_ch)}{src_ch}{_RESET}')
+                if av_contain and src_ch == ' ':
+                    chars.append(f'{_DIM}{ch}{_RESET}')
                 else:
                     chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
             return ''.join(chars)
