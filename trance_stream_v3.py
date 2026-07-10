@@ -307,19 +307,23 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
     def render_thread():
         bar_idx   = renderer._bar   # may be non-zero after --from-bar fast-forward
         bars_done = 0
-        while not stop_event.is_set():
-            if n_bars is not None and bars_done >= n_bars:
-                break
-            t0 = time.time()
-            bar_l, bar_r = renderer._render_bar()
-            if volume != 1.0:
-                bar_l = bar_l * volume
-                bar_r = bar_r * volume
-            render_ms = (time.time() - t0) * 1000
-            audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
-            bar_idx  += 1
-            bars_done += 1
-        audio_queue.put(SENTINEL)
+        try:
+            while not stop_event.is_set():
+                if n_bars is not None and bars_done >= n_bars:
+                    break
+                t0 = time.time()
+                bar_l, bar_r = renderer._render_bar()
+                if volume != 1.0:
+                    bar_l = bar_l * volume
+                    bar_r = bar_r * volume
+                render_ms = (time.time() - t0) * 1000
+                audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
+                bar_idx  += 1
+                bars_done += 1
+        except (KeyboardInterrupt, Exception):
+            pass
+        finally:
+            audio_queue.put(SENTINEL)
 
     render_t = threading.Thread(target=render_thread, daemon=True)
     render_t.start()
