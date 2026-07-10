@@ -276,13 +276,14 @@ class Visualiser:
             tools_dir = os.path.dirname(os.path.abspath(__file__))
             repo_dir = os.path.dirname(tools_dir)
             sys.path.insert(0, tools_dir)
-            from ascii_video import load_frames
-            from ascii_video import load_frames, content_fill_ratio
+            from ascii_video import load_frames, content_fill_ratio, crop_to_content
             for path in sorted(glob.glob(os.path.join(repo_dir, 'ascii_videos', '*.txt'))):
                 try:
                     frames, fps, w, h = load_frames(path)
                     if frames:
                         fill = content_fill_ratio(frames, w)
+                        if fill < 0.9:
+                            frames, w, h = crop_to_content(frames)
                         self._av_playlist.append((frames, fps, w, h, fill))
                 except Exception:
                     pass

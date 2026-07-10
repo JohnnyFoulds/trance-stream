@@ -218,3 +218,54 @@ def test_playlist_tuple_includes_fill_ratio():
     entry = (frames, fps, w, h, fill)
     assert len(entry) == 5
     assert 0.0 <= entry[4] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# crop_to_content
+# ---------------------------------------------------------------------------
+
+def test_crop_strips_blank_padding():
+    from ascii_video import load_frames, crop_to_content
+    frames, _, w, h = load_frames(str(ASCII_VIDEOS_DIR / 'death_angel_12fps_114x21.txt'))
+    cropped, cw, ch = crop_to_content(frames)
+    assert cw < w, f"Cropped width {cw} should be less than original {w}"
+    assert ch <= h, f"Cropped height {ch} should be <= original {h}"
+
+
+def test_crop_content_fills_cropped_canvas():
+    from ascii_video import load_frames, crop_to_content, content_fill_ratio
+    frames, _, w, _ = load_frames(str(ASCII_VIDEOS_DIR / 'death_angel_12fps_114x21.txt'))
+    cropped, cw, ch = crop_to_content(frames)
+    ratio = content_fill_ratio(cropped, cw)
+    assert ratio >= 0.9, f"After crop, fill ratio should be >= 0.9, got {ratio:.2f}"
+
+
+def test_crop_preserves_full_frame_art_width():
+    """Full-frame art width should be unchanged by cropping (content reaches the edges)."""
+    from ascii_video import load_frames, crop_to_content
+    frames, _, w, h = load_frames(str(ASCII_VIDEOS_DIR / 'bad_apple_frames.txt'))
+    cropped, cw, ch = crop_to_content(frames)
+    assert cw == w, f"Bad Apple width should be unchanged: {cw} != {w}"
+    assert ch <= h, f"Cropped height {ch} should not exceed original {h}"
+
+
+def test_crop_preserves_frame_count():
+    from ascii_video import load_frames, crop_to_content
+    frames, _, w, _ = load_frames(str(ASCII_VIDEOS_DIR / 'death_angel_12fps_114x21.txt'))
+    cropped, _, _ = crop_to_content(frames)
+    assert len(cropped) == len(frames)
+
+
+def test_cropped_logo_scales_up_to_fill_ca():
+    """After cropping, contain-mode scaling should reach close to the CA dimensions."""
+    from ascii_video import load_frames, crop_to_content
+    frames, _, _, _ = load_frames(str(ASCII_VIDEOS_DIR / 'death_angel_12fps_114x21.txt'))
+    cropped, cw, ch = crop_to_content(frames)
+    ca_inner, ca_lines = 114, 27
+    scale = min(ca_inner / cw, ca_lines / ch)
+    scaled_w = int(cw * scale)
+    scaled_h = int(ch * scale)
+    # At least one axis should be within 1 cell of the CA boundary
+    assert scaled_w >= ca_inner - 1 or scaled_h >= ca_lines - 1, (
+        f"Cropped logo doesn't scale to fill CA: scaled={scaled_w}x{scaled_h}, CA={ca_inner}x{ca_lines}"
+    )

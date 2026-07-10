@@ -329,11 +329,13 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
 
         av_playlist = []
         if ascii_video_paths:
-            from ascii_video import load_frames as _load_av, content_fill_ratio as _fill_ratio
+            from ascii_video import load_frames as _load_av, content_fill_ratio as _fill_ratio, crop_to_content as _crop
             for path in ascii_video_paths:
                 frames, fps, w, h = _load_av(path)
                 if frames:
                     fill = _fill_ratio(frames, w)
+                    if fill < 0.9:
+                        frames, w, h = _crop(frames)
                     av_playlist.append((frames, fps, w, h, fill))
                     print(f"  ASCII video: {len(frames)} frames @ {fps}fps  ({w}×{h})  fill={fill:.0%}  {path}")
 
