@@ -1,215 +1,193 @@
-# Plan: Black-Box Synthesis Parameter Optimisation via CLAP
+# Plan: Fix CLAP + Resolve Uncertainty + Full Optimisation Run
 
 ## Context
 
-Manual EXP-001→EXP-016 got spectral_centroid_ratio and band_energy_cosine to PASS but
-CLAP is plateaued at 0.527 vs target 0.70. The two remaining gaps (mfcc=0.794, CLAP=0.527)
-are not addressable by spectral reasoning — they are holistic perceptual gaps that require
-exploring a ~15-dimensional continuous parameter space in ways that are combinatorially
-intractable by hand. This is a classic black-box optimisation problem: we have parameters,
-a differentiable-free objective (CLAP cosine), a reference, and a generator. Just use ML.
+We are on branch `sidequest/pluck-arp-analysis`. Goal: all four Tier-1 metrics passing
+simultaneously: CLAP ≥ 0.70, centroid_ratio ∈ [0.70, 1.30], band_energy_cosine ≥ 0.85,
+mfcc_cosine ≥ 0.80.
+
+Current best (EXP-016): centroid ✓, band_energy ✓, mfcc=0.794 (0.006 below), CLAP=0.527.
+But ALL CLAP scores EXP-000 through EXP-016 are invalid — see BLOCKING-001/002 in
+`experiment_log.md`. The fixes (`enable_fusion=True`, `N_BARS=16`) are already applied.
+
+**Do NOT merge to main until all four gates pass simultaneously.**
 
 ---
 
-## Academic Framing
+## Known uncertainties — resolve via spikes before committing to long runs
 
-**The formal problem:**
-  θ* = argmax_θ  CLAP(x_ref, G(θ))
-where G is the hey_angel renderer (non-differentiable numpy/scipy), θ is the parameter
-vector, and CLAP is the objective (pre-trained neural audio embedding cosine similarity).
+Four things we do not yet know that will materially change the execution path:
 
-**Why not gradient descent / DDSP:**
-Differentiable DSP (Engel et al., 2020, NeurIPS) rewrites the synthesiser in PyTorch so
-gradients flow from the loss through the signal processing chain back to θ. Requires
-rewriting every instrument class in autograd-compatible ops — overkill for a ~15-parameter
-problem. We keep the numpy synthesiser and treat it as a black box.
-
-**Why not RL / GANs:**
-RL requires thousands of rollouts and is designed for sequential decision problems.
-GANs generate audio — they don't invert it to parameters. Both are wrong tools here.
-
-**The right tool — CMA-ES:**
-Covariance Matrix Adaptation Evolution Strategy (Hansen 2016) is the de facto standard
-for black-box optimisation of 10–100 continuous parameters. Adapts a full covariance
-matrix over the search distribution, escaping saddle points and elongated valleys. Used
-specifically for synthesiser sound matching: Yee-King (2011) "Automatic Programming of
-VST Synthesizers" found evolutionary strategies superior to gradient methods on exactly
-this type of problem. Pure Python, `pip install cma` (~30 kB).
-
-**Multi-fidelity trick** (Li et al. 2017 ASHA / successive halving):
-Render 4 bars instead of 15 during search (~5× speedup per eval). Each eval: render=0.1s
-+ CLAP=2–3s (cached model) ≈ 3s total → 500 evals in ~25 min. Promote best candidates
-to full 15-bar evaluation at the end.
-
-**Fallback — Differential Evolution** (Storn & Price 1997):
-Already in `scipy.optimize`, zero new dependencies, parallelisable. Slower than CMA-ES
-to converge but works fine for this dimensionality.
-
----
-
-## Parameter Space (15 continuous dims)
-
-| # | Parameter | Bounds | Current (EXP-016) |
+| # | Uncertainty | Spike | Cost |
 |---|---|---|---|
-| 0 | `lead_cutoff_hz` | [300, 8000] | 2400 |
-| 1 | `lead_gain` | [0.05, 0.70] | 0.35 |
-| 2 | `pad_cutoff_slider` | [0.35, 0.75] | 0.593 |
-| 3 | `pad_gain` | [0.3, 3.5] | 1.50 |
-| 4 | `hihat_gain` | [0.2, 3.0] | 1.40 |
-| 5 | `bass_cutoff_g1` | [0.18, 0.60] | 0.38 |
-| 6 | `reverb_room` | [0.2, 0.9] | 0.45 |
-| 7 | `reverb_wet` | [0.05, 0.45] | 0.20 |
-| 8 | `sidechain_depth` | [0.3, 0.95] | 0.721 |
-| 9 | `gain_kick` | [0.15, 0.80] | 0.40 |
-| 10 | `gain_bass` | [0.15, 0.70] | 0.303 |
-| 11 | `gain_pluck` | [0.03, 0.50] | 0.16 |
-| 12 | `kick_decay_s` | [0.10, 0.50] | 0.25 |
-| 13 | `kick_pitch_floor` | [30, 80] | 50 |
-| 14 | `hihat_decay_s` | [0.02, 0.15] | 0.06 |
+| U1 | What does fusion CLAP actually score on EXP-016 params? | EXP-017 dry-run | ~5 min |
+| U2 | How slow is fusion CLAP per eval? (determines total run time) | Time one eval in dry-run | ~5 min (same run as U1) |
+| U3 | Is CLAP ≥ 0.70 achievable at all with current architecture? | 50-iter CMA-ES probe | ~30 min |
+| U4 | Does fixing Bug 2 (trancegate shape) move mfcc? | Implement + one measurement | ~1 hour |
+
+**Critical sequencing decision**: If U4 resolves as YES (Bug 2 fixes mfcc), the full
+500-iter CMA-ES should run AFTER the bug fix, not before. Running 500 evals against a
+known architectural ceiling is wasteful. Spikes U1/U2 and U3 can proceed in parallel with
+U4 investigation.
 
 ---
 
-## Deliverable: `tools/optimize_hey_angel.py`
+## Phase 1 — Apply fixes + Spike U1 + U2: re-baseline and timing
 
-One new script. One small addition to `hey_angel_cover.py`.
+**CLAP fixes already applied** (this session):
+- `tools/compare_audio.py` line 91: `enable_fusion=True`
+- `tools/optimize_hey_angel.py` line ~100: `enable_fusion=True`
+- `tools/optimize_hey_angel.py` N_BARS: `16`
 
-### `hey_angel_cover.py` change
-
-Add a `HeyAngelRenderer.from_params(params: dict)` classmethod (~15 lines) that
-instantiates the renderer with all parameters taken from the dict instead of hardcoded
-values. The existing `__init__` is not changed — `from_params` just calls it after
-setting module-level overrides or by passing them through a thin wrapper.
-
-Cleanest approach: `from_params` creates the renderer then immediately patches the
-mutable attributes:
-```python
-@classmethod
-def from_params(cls, p: dict, sr: int = SR, n_bars: int = 4) -> 'HeyAngelRenderer':
-    r = cls(sr=sr, n_bars=n_bars)
-    r._lead   = SmoothLead(cutoff_hz=p['lead_cutoff_hz'], gain=p['lead_gain'], sr=sr)
-    r._pad    = SupersawPad(root_midi=43, cutoff_slider=p['pad_cutoff_slider'],
-                            sr=sr, voicing_offsets=PAD_VOICING_OFFSETS)
-    r._reverb = SchroederReverb(room_size=p['reverb_room'], wet=p['reverb_wet'], sr=sr)
-    r._sc     = Sidechain(depth=p['sidechain_depth'], attack_s=SIDECHAIN_ATTACK_S, sr=sr)
-    r._kit    = DrumKit(seed=42, sr=sr,
-                        kick_decay_s=p['kick_decay_s'],
-                        kick_pitch_floor=p['kick_pitch_floor'])
-    r._gain_kick   = p['gain_kick']
-    r._gain_bass   = p['gain_bass']
-    r._gain_lead   = p['lead_gain']
-    r._gain_hihat  = p['hihat_gain']
-    r._gain_pluck  = p['gain_pluck']
-    r._gain_pad    = p['pad_gain']
-    r._bass_cutoff_g1 = p['bass_cutoff_g1']  # stored for use in render_bar
-    r._hihat_decay_s  = p['hihat_decay_s']
-    return r
+**Run**:
+```bash
+python tools/optimize_hey_angel.py --dry-run
 ```
 
-`render_bar` reads `self._bass_cutoff_g1` and `self._hihat_decay_s` if present,
-otherwise falls back to hardcoded defaults (so existing behaviour is unchanged).
+This resolves U1 (new valid CLAP baseline) and U2 (timing per eval).
 
-### `tools/optimize_hey_angel.py` architecture
+**Record as EXP-017** in `experiment_log.md`:
+- All four Tier-1 metrics under corrected CLAP (fusion, 16 bars)
+- Timing per eval (CLAP load time + inference time)
 
-```python
-# 1. ClapSingleton — load model ONCE, reuse for all 500+ evaluations
-class ClapSingleton:
-    _instance = None
-    def score(self, ref_path, gen_path) -> float: ...
-
-# 2. ParameterSpace — bounds, encode/decode numpy vector <-> dict
-class ParameterSpace:
-    BOUNDS = [...]      # list of (lo, hi) for each of 15 dims
-    NAMES  = [...]
-    def encode(self, d: dict) -> np.ndarray: ...   # dict -> [0,1]^15 normalised
-    def decode(self, x: np.ndarray) -> dict: ...   # [0,1]^15 -> raw param dict
-
-# 3. objective(x) — the loss function
-def objective(x: np.ndarray) -> float:
-    params = space.decode(x)
-    wav = f'/tmp/ha_opt_{os.getpid()}_{counter}.wav'
-    renderer = HeyAngelRenderer.from_params(params, n_bars=N_BARS_FAST)
-    audio_l, audio_r = renderer.render_bars(N_BARS_FAST)
-    write_wav(wav, audio_l, audio_r, SR)
-    clap = clap_singleton.score(REF_PATH, wav)
-    # soft spectral guard to prevent degenerate solutions (e.g. all silence)
-    band_e = fast_band_energy_cosine(wav)   # cheap librosa call, no CLAP
-    penalty = max(0.0, 0.70 - band_e) * 0.4
-    score = clap - penalty
-    log_eval(params, clap, score)
-    return -score   # minimise
-
-# 4. run() — CMA-ES or fallback to scipy DE
-def run():
-    x0 = space.encode(CURRENT_BEST)   # warm-start from EXP-016
-    try:
-        import cma
-        es = cma.CMAEvolutionStrategy(x0, sigma0=0.25, {
-            'maxiter': MAXITER, 'popsize': 8,
-            'bounds': [[0]*15, [1]*15],
-        })
-        while not es.stop():
-            xs = es.ask()
-            fs = [objective(x) for x in xs]
-            es.tell(xs, fs)
-    except ImportError:
-        from scipy.optimize import differential_evolution
-        result = differential_evolution(objective, [(0,1)]*15,
-            maxiter=MAXITER, popsize=8, seed=42,
-            x0=x0, callback=print_progress)
-
-# 5. After loop: promote top-K to N_BARS_FULL=15, write best_params.json
-```
-
-### CLI
-
-```
-python tools/optimize_hey_angel.py --dry-run          # 1 eval, verify CLAP loads
-python tools/optimize_hey_angel.py --iters 500        # full run
-python tools/optimize_hey_angel.py --iters 500 --use-scipy   # fallback, no cma dep
-```
-
-### Outputs
-
-- `optimize_log.csv` — every evaluation: iteration, CLAP, all 15 params
-- `best_params.json` — best θ found at 4-bar and 15-bar fidelity
-- Terminal: live best CLAP, iteration count, ETA
+**Decision gates after EXP-017**:
+- If CLAP ≥ 0.70 AND mfcc ≥ 0.80: all gates pass → merge is unblocked, skip remaining phases.
+- If CLAP < 0.30: something unexpected — diagnose before proceeding.
+- Otherwise (expected: CLAP in [0.40, 0.70]): proceed to Phase 2.
 
 ---
 
-## Files to Create / Modify
+## Phase 2 — Spike U4: Bug 2 trancegate floor (do this BEFORE full optimiser run)
 
-| File | Action |
-|---|---|
-| `tools/optimize_hey_angel.py` | **Create** — ~200 lines |
-| `hey_angel_cover.py` | **Add** `from_params()` classmethod + 2 render_bar fallback reads |
-| `docs/decisions/clap_optimisation_plan.md` | **Copy** this plan (Step 0) |
-| `research/analysis/experiment_log.md` | **Append** OPT-001 entry after run |
+**Why first**: The mfcc plateau at 0.794 across EXP-010 through EXP-016 (7 different lead
+gain values, no improvement) is not a parameter tuning problem. It is an amplitude envelope
+character mismatch in the trancegate. CLAP and MFCC are correlated — if the trancegate is
+capping mfcc, it is also capping CLAP. Running 500 CMA-ES evals against this ceiling wastes
+the run.
+
+**The bug**: The trancegate is already correctly implemented as a binary 16-step-per-bar
+gate in `synth/envelopes.py` — this part is right. The problem is the **floor value**.
+
+SA's Strudel code uses `.clip(.7)` on off-slots: the pad amplitude oscillates between
+**1.0** (on) and **0.7** (off) — a gentle 30% dip per off-step.
+
+Our implementation uses `TRANCEGATE_FLOOR = 0.3` in `song/theory.py:127` — the pad drops
+to **0.3** on off-steps, a 70% dip, more than twice as aggressive.
+
+The comment at line 127 explains why: `"SA uses 0.7 but 0.3 avoids FDN transients"`. This
+was a conservative choice made to prevent the hard gate from causing artifacts in the FDN
+reverb. That concern was never measured — it was just assumed.
+
+**MFCC consequence**: MFCC coefficients encode the spectral envelope shape over time.
+SA's pad has subtle rhythmic modulation (1.0 → 0.7 → 1.0). Ours has dramatic choppy cuts
+(1.0 → 0.3 → 1.0). These produce structurally different MFCC trajectories regardless of
+spectral content. The reference embedding reflects the subtle modulation; ours reflects
+the aggressive one.
+
+**The spike**:
+1. Pre-specify hypothesis in `experiment_log.md` (required before touching code)
+2. Change `TRANCEGATE_FLOOR = 0.3` → `0.7` in `song/theory.py:127`
+3. Render 16 bars, run `compare_audio.py` with fixed CLAP
+4. Record as EXP-018
+5. Listen to the output for FDN transient artifacts (the original concern)
+
+**Hypothesis to pre-specify**: Raising `TRANCEGATE_FLOOR` from 0.3 to SA's 0.7 will
+increase mfcc_cosine from the EXP-017 value by ≥ 0.01, and increase CLAP_cosine, without
+materially decreasing band_energy_cosine or centroid_ratio.
+
+**Falsification criterion**: If mfcc_cosine does not increase by ≥ 0.01 relative to
+EXP-017, the hypothesis is rejected and the floor is reverted to 0.3.
+
+**Decision gate after EXP-018**:
+- If mfcc increases ≥ 0.01 and no audible FDN artifacts: fix confirmed. Keep floor=0.7,
+  proceed to Phase 3 from this better starting point.
+- If mfcc increases but audible FDN artifacts appear: the FDN concern was real. Set floor
+  to an intermediate value (e.g. 0.5) and re-test as EXP-019 before Phase 3.
+- If mfcc does not move: revert to 0.3. The mfcc ceiling is elsewhere. Proceed to Phase 3
+  and let CMA-ES explore — the ceiling may be higher than we think under fusion CLAP.
 
 ---
 
-## Step 0 (before writing any code)
+## Phase 3 — Spike U3 + Full CMA-ES optimisation
 
-Copy this plan into the repo:
+### Spike U3: 50-iter probe (runs fast, answers whether the objective is alive)
+
+```bash
+python tools/optimize_hey_angel.py --iters 50 > /tmp/opt_probe.log 2>&1
 ```
-cp ~/.claude/plans/is-our-tools-fully-wise-book.md \
-   docs/decisions/clap_optimisation_plan.md
+
+Watch for monotonically increasing "new best" lines. If CLAP is not moving after 50 evals
+(all scores within ±0.01 of starting point), the loss landscape is flat or the warm-start
+is already at a local optimum — switch to `--use-scipy` (Differential Evolution) which
+explores more aggressively.
+
+### Full run (launch only after probe shows improvement is possible)
+
+**Formal problem**: θ* = argmax_θ CLAP(x_ref, G(θ)) where G is the hey_angel renderer
+(non-differentiable numpy/scipy). This is analysis-by-synthesis (AbS).
+
+**Algorithm: CMA-ES** (Hansen, 2016; Hansen & Ostermeier, 2001): de facto standard for
+black-box optimisation of 10–100 continuous parameters. Adapts a full covariance matrix
+over the search distribution. Yee-King (2011) showed evolutionary strategies outperform
+gradient methods on synthesiser parameter matching.
+
+**Loss function**:
+```
+score = CLAP(ref, gen) − max(0, 0.70 − band_energy_cosine) × 0.4
+CMA-ES minimises −score
+```
+The spectral penalty prevents degenerate solutions that achieve high CLAP by accident
+(e.g. sub-bass collapse or silence).
+
+**15-dimensional parameter space** (full bounds in `tools/optimize_hey_angel.py` `_SPACE`):
+lead_cutoff_hz, lead_gain, pad_cutoff_slider, pad_gain, hihat_gain, bass_cutoff_g1,
+reverb_room, reverb_wet, sidechain_depth, gain_kick, gain_bass, gain_pluck, kick_decay_s,
+kick_pitch_floor, hihat_decay_s. All normalised to [0,1]^15.
+
+**Configuration**: warm-start from EXP-016 (or EXP-018 if Bug 2 was fixed), σ₀=0.25,
+popsize=8, maxiter=500.
+
+**Timing estimate**: 16-bar render ≈ 0.5s + fusion CLAP inference ≈ 4–6s (to be confirmed
+by EXP-017 timing) → ~5–7s/eval → 500 evals ≈ 40–60 min.
+
+```bash
+python tools/optimize_hey_angel.py --iters 500 > /tmp/opt_run.log 2>&1 &
+tail -f /tmp/opt_run.log
 ```
 
----
-
-## Verification
-
-1. `pip install cma`
-2. `python tools/optimize_hey_angel.py --dry-run` → confirm CLAP loads once, score prints
-3. `python tools/optimize_hey_angel.py --iters 500` → runs ~25 min, writes `best_params.json`
-4. Apply best params to `hey_angel_cover.py`, run `compare_audio.py`, record as OPT-001
-5. If CLAP ≥ 0.70: all four Tier-1 gates checked; if PASS → merge branch
+Fallback if CMA-ES stalls: `--use-scipy` (Differential Evolution — different search
+dynamics, more aggressive global exploration, useful if CMA-ES is stuck in a valley).
 
 ---
 
-## Expected outcome
+## Phase 4 — Apply best params and gate check
 
-CMA-ES at 500 evaluations in 15 dims typically converges to within 90% of the global
-optimum. Given CLAP is at 0.527 and the target is 0.70, and the parameter space is
-not yet fully explored (we have only tested ~20 manual points), reaching 0.65–0.72 in
-one run is realistic. The multi-fidelity trick keeps wall-clock time under 30 minutes.
+After optimiser completes, `best_params.json` contains the best θ found.
+
+1. Apply params to `hey_angel_cover.py`
+2. Render 16 bars, run `compare_audio.py` (fusion CLAP)
+3. Record as OPT-001 in `experiment_log.md`
+4. **Gate check** (all must pass simultaneously):
+   - CLAP ≥ 0.70 ✓?
+   - centroid_ratio ∈ [0.70, 1.30] ✓?
+   - band_energy_cosine ≥ 0.85 ✓?
+   - mfcc_cosine ≥ 0.80 ✓?
+
+**If all pass** → merge `sidequest/pluck-arp-analysis` to main is unblocked.
+
+**If CLAP or mfcc still fails** after optimiser + Bug 2 fix: the remaining gap is in
+oscillator type (supersaw vs. the actual SA oscillator stack). This is Phase 2 work
+(oscillator architecture), not parameter tuning. Record as a new ADR and plan separately.
+
+---
+
+## Commit strategy
+
+1. **Now**: "Fix CLAP evaluation: enable_fusion=True, N_BARS=16 — resolves BLOCKING-001/002"
+   - `tools/compare_audio.py`, `tools/optimize_hey_angel.py`, `research/analysis/experiment_log.md`
+2. **After EXP-017**: "EXP-017: re-baseline under corrected CLAP (fusion, 16 bars)"
+   - `research/analysis/experiment_log.md`
+3. **After EXP-018** (if trancegate fix retained): "EXP-018: binary trancegate — Bug 2 fix"
+   - `instruments/pad.py`, `research/analysis/experiment_log.md`
+4. **After OPT-001**: "OPT-001: apply CMA-ES best params to hey_angel_cover.py"
+   - `hey_angel_cover.py`, `best_params.json`, `research/analysis/experiment_log.md`

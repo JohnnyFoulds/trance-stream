@@ -415,3 +415,46 @@ EXP-016: reverb wet=0.20 → band_energy=0.854 ✓, mfcc=0.794 (0.006 below), CL
 **Best configuration (EXP-016)**: lead=0.35, pad cutoff_slider=0.593, _gain_pad=1.50, _gain_hihat=1.40, reverb wet=0.20. Metrics: centroid=0.995 ✓, band_energy=0.854 ✓, mfcc=0.794 (0.006 below), CLAP=0.527.
 
 **Phase 1 outcome**: spectral_centroid_ratio and band_energy_cosine both passing simultaneously. mfcc_cosine plateau at 0.794–0.796 regardless of lead gain in the 0.35–0.38 range. This is consistent with the MFCC gap originating from oscillator timbre (instrument character), not from spectral shape — Phase 2 territory. The remaining MFCC deficit (0.006) and CLAP deficit (0.527 vs 0.70) require investigation of oscillator type and trancegate shape (Bug 2).
+
+---
+
+## ⚠ CRITICAL BLOCKING LIMITATIONS — Must be resolved before CLAP results are meaningful
+
+These are not minor caveats. Both limitations mean every CLAP number recorded in this log (EXP-000 through EXP-016, including all values in `optimize_log.csv`) is measuring the wrong thing. The optimiser cannot reach ≥ 0.70 under these conditions regardless of synthesis quality.
+
+---
+
+### BLOCKING-001 — CLAP `enable_fusion=False` discards everything past 10 seconds
+
+**Affects**: `tools/compare_audio.py` line 91, `tools/optimize_hey_angel.py` line ~100  
+**Severity**: CRITICAL — invalidates all CLAP scores in this log
+
+**What happens with `enable_fusion=False`**: LAION-CLAP hard-clips all audio to exactly 10 seconds before embedding. The reference `hey_angel_trimmed.wav` is **26.6 seconds**. The 15-bar generator output is ~**26.2 seconds**. Both are clipped to 10s. CLAP is comparing the first 10 seconds of a 27-second trance track against the first 10 seconds of the reference — 16 seconds of arrangement structure (build, peak, release) are silently discarded from both sides.
+
+**What `enable_fusion=True` does**: Segments the audio into overlapping 10s windows, produces an embedding per window, pools across all windows. This is the correct mode for any audio longer than 10 seconds and is the intended mode for music evaluation.
+
+**Measured consequence**: `ref(26.6s) vs ref(7s truncation) = 0.7276` with `enable_fusion=False`. A perfect clone of the reference truncated to 7s scores only 0.73 against itself — the 4-bar optimiser run (6.85s gen, 3.15s silence pad) had an effective ceiling of ~0.73 regardless of synthesis quality.
+
+**Fix**: Set `enable_fusion=True` in both `compare_audio.py` and `optimize_hey_angel.py`. Re-run all baseline measurements from EXP-000 onward to establish a valid CLAP baseline.
+
+**Impact on existing scores**: All CLAP values in EXP-000 through EXP-016 are not comparable to the target of 0.70 under fusion mode. They may be higher or lower after the fix — they must be re-measured before drawing any conclusions about progress toward the 0.70 threshold.
+
+---
+
+### BLOCKING-002 — Optimiser render duration (N_BARS) must match reference duration
+
+**Affects**: `tools/optimize_hey_angel.py`, `N_BARS` constant  
+**Severity**: CRITICAL — optimiser was searching against a structurally mismatched objective
+
+**History of breakage**:
+- Original: `N_BARS = 4` (6.85s gen + 3.15s silence padding → ceiling ≈ 0.73 even with perfect synthesis)
+- Intermediate "fix": `N_BARS = 8` (13.7s) — still wrong; CLAP still clips to 10s with `enable_fusion=False`
+- Correct fix: `N_BARS = 16` **and** `enable_fusion=True`
+
+**Why N_BARS = 16**: At 140 BPM, 16 bars = 27.43s ≈ 26.6s reference. With `enable_fusion=True`, CLAP will process the full 27s of generated audio across multiple windows, pooling across the same arrangement arc that the reference embedding covers. Short renders (4 or 8 bars) are a qualitatively different audio object — they lack the build structure, the arrangement arc, and the density variation that define the reference's embedding. No synthesis parameter tuning can compensate for a structurally shorter clip.
+
+**Fix**: Set `N_BARS = 16` in `optimize_hey_angel.py`. Combined with BLOCKING-001 fix, this makes the gen and ref embeddings directly comparable.
+
+---
+
+**Resolution plan**: Fix both issues together (single commit), re-run `--dry-run` to confirm baseline CLAP is higher than 0.527 (the EXP-016 value under broken conditions), then re-launch optimiser.

@@ -5,8 +5,11 @@
 """Black-box synthesis parameter optimisation using CLAP as the objective.
 
 Finds the hey_angel_cover.py parameter vector θ that maximises CLAP cosine
-similarity to the reference audio. Uses CMA-ES (Hansen 2016) with a multi-
-fidelity trick: 4-bar renders during search, 15-bar validation at the end.
+similarity to the reference audio. Uses CMA-ES (Hansen 2016).
+
+CLAP internally clips all audio to 10 seconds before embedding. At 140 BPM,
+8 bars = 13.7s so CLAP always receives 10s of real content from both ref and
+gen — no silence padding, no length-mismatch penalty.
 
 Usage
 -----
@@ -18,7 +21,7 @@ Usage
 Outputs
 -------
     optimize_log.csv     — every evaluation (params + CLAP + scores)
-    best_params.json     — best θ at 4-bar and 15-bar fidelity
+    best_params.json     — best θ found
 """
 from __future__ import annotations
 
@@ -43,10 +46,8 @@ LOG_PATH   = os.path.join(_REPO, 'optimize_log.csv')
 BEST_PATH  = os.path.join(_REPO, 'best_params.json')
 TMP_WAV    = f'/tmp/ha_opt_{os.getpid()}.wav'
 
-SR         = 44100
-N_BARS_FAST = 4     # during search
-N_BARS_FULL = 15    # final validation
-PROMOTE_K   = 5     # top-K candidates re-evaluated at full fidelity
+SR      = 44100
+N_BARS  = 16  # 16 bars = 27.4s at 140 BPM ≈ 26.6s reference; fusion CLAP processes full duration
 
 # ── parameter space ───────────────────────────────────────────────────────────
 
@@ -96,7 +97,7 @@ class _ClapSingleton:
         import laion_clap
         print("Loading CLAP model (first time only)…", flush=True)
         t0 = time.time()
-        self._model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-tiny')
+        self._model = laion_clap.CLAP_Module(enable_fusion=True, amodel='HTSAT-tiny')
         self._model.load_ckpt()
         print(f"CLAP loaded in {time.time()-t0:.1f}s", flush=True)
         # Cache reference embedding — it never changes
@@ -168,7 +169,7 @@ def _open_log():
         _log_writer.writeheader()
 
 
-def objective(x: np.ndarray, n_bars: int = N_BARS_FAST) -> float:
+def objective(x: np.ndarray, n_bars: int = N_BARS) -> float:
     from hey_angel_cover import HeyAngelRenderer
     i = next(_eval_counter)
     params = decode(x)
@@ -199,30 +200,6 @@ def objective(x: np.ndarray, n_bars: int = N_BARS_FAST) -> float:
               flush=True)
 
     return -score   # minimise
-
-
-# ── promote: re-evaluate top-K at full fidelity ───────────────────────────────
-
-def promote_top_k(log_path: str, k: int = PROMOTE_K) -> dict:
-    rows = []
-    with open(log_path, newline='') as f:
-        for row in csv.DictReader(f):
-            rows.append(row)
-    rows.sort(key=lambda r: float(r['clap']), reverse=True)
-    top = rows[:k]
-    print(f"\nPromoting top {k} candidates to {N_BARS_FULL}-bar evaluation…")
-    best_clap = -1.0
-    best_params = None
-    for rank, row in enumerate(top):
-        params = {n: float(row[n]) for n in NAMES}
-        x = encode(params)
-        score_full = -objective(x, n_bars=N_BARS_FULL)
-        clap_full  = clap_score(TMP_WAV)
-        print(f"  rank {rank+1}: CLAP(4bar)={float(row['clap']):.4f}  CLAP(15bar)={clap_full:.4f}")
-        if clap_full > best_clap:
-            best_clap   = clap_full
-            best_params = params
-    return best_params, best_clap
 
 
 # ── run CMA-ES ────────────────────────────────────────────────────────────────
@@ -276,17 +253,12 @@ def main():
                     help='Run one evaluation and exit (verify setup)')
     ap.add_argument('--use-scipy', action='store_true',
                     help='Use scipy differential_evolution instead of cma')
-    ap.add_argument('--no-promote', action='store_true',
-                    help='Skip full-fidelity promotion step')
     args = ap.parse_args()
 
     if not os.path.exists(REF_PATH):
         print(f"ERROR: reference not found: {REF_PATH}")
         sys.exit(1)
 
-    # Pre-warm CLAP before opening log (so timing is accurate)
-    _ = clap_score.__doc__  # noop — model loads on first call to clap_score
-    _clap_dummy = _ClapSingleton.__new__(_ClapSingleton)  # force load now
     global _clap
     _clap = _ClapSingleton()
 
@@ -318,21 +290,15 @@ def main():
     elapsed = time.time() - t_start
     print(f"\nOptimisation finished in {elapsed/60:.1f} min  "
           f"({next(_eval_counter)-1} evaluations)")
-    print(f"Best CLAP (4-bar): {_best_clap[0]:.4f}")
+    print(f"Best CLAP ({N_BARS}-bar): {_best_clap[0]:.4f}")
 
-    # Promote top-K to full fidelity
     best_params = decode(xbest)
-    best_clap_full = _best_clap[0]
-    if not args.no_promote:
-        best_params, best_clap_full = promote_top_k(LOG_PATH, k=PROMOTE_K)
-
-    print(f"Best CLAP (15-bar): {best_clap_full:.4f}")
     print(f"\nBest parameters:")
     for n, v in best_params.items():
         print(f"  {n:<22} = {v:.5f}")
 
     with open(BEST_PATH, 'w') as f:
-        json.dump({'clap_15bar': best_clap_full, 'params': best_params}, f, indent=2)
+        json.dump({'clap': _best_clap[0], 'n_bars': N_BARS, 'params': best_params}, f, indent=2)
     print(f"\nSaved → {BEST_PATH}")
     print(f"Log   → {LOG_PATH}")
 

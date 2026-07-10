@@ -88,7 +88,7 @@ def _clap_cosine(path_ref: str, path_gen: str):
         print("            pip install laion-clap")
         return None
 
-    model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-tiny')
+    model = laion_clap.CLAP_Module(enable_fusion=True, amodel='HTSAT-tiny')
     model.load_ckpt()  # downloads ~340 MB checkpoint on first run
     embeddings = model.get_audio_embedding_from_filelist(
         [str(path_ref), str(path_gen)], use_tensor=False
