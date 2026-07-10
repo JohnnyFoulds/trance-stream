@@ -81,42 +81,112 @@
 const statusEl = document.getElementById('status');
 const errorEl  = document.getElementById('error');
 
-const PREBAKE_URL =
-  'https://raw.githubusercontent.com/switchangel/strudel-scripts/main/prebake.strudel';
+// Inline only the 3 SA custom functions we need — no full prebake eval,
+// which would launch her $: demo patterns and spam "Can't do arithmetic" warnings.
+// rlpf uses the Pattern-level .mul/.pow rather than pure() to avoid the
+// "arithmetic on control pattern" error in Strudel 1.x.
+const SA_FUNCTIONS = `
+window.soloedOrbits = [];
+window.mutedOrbits  = [];
 
-// After initStrudel(), window.evaluate and window.hush are global functions.
-// We register SA's custom functions (trancegate, rlpf, .o(), etc.) by calling
-// window.evaluate(prebakeText) which runs in Strudel's scope where Pattern,
-// register, reify etc. are defined.
-// AudioContext starts suspended — no sound until first user click.
+register('trancegate', (density, seed, length, x) => {
+  density = reify(density).add(.5);
+  return x.struct(rand.mul(density).round().seg(16).rib(seed, length)).fill().clip(.7);
+});
 
-let _repl    = null;
-let _ready   = false;
+register('rlpf', (x, pat) => {
+  return pat.lpf(reify(x).mul(12).pow(4));
+});
+
+register('o', (orbit, pat) => {
+  pat = pat.orbit(orbit);
+  if (window.mutedOrbits.includes(orbit))  return pat.hush();
+  if (!window.soloedOrbits.length || window.soloedOrbits.includes(orbit)) return pat;
+  return pat.hush();
+});
+
+silence
+`;
+
+let _repl  = null;
+let _ready = false;
 
 // Expose internals for automated testing
 window.__debug = { get repl() { return _repl; }, get ready() { return _ready; } };
 
 (async () => {
   try {
-    const [repl, prebakeText] = await Promise.all([
-      initStrudel(),
-      fetch(PREBAKE_URL).then(r => { if (!r.ok) throw new Error('prebake fetch ' + r.status); return r.text(); }),
-    ]);
-    _repl = repl;
-    // Register SA's functions in Strudel's scope via window.evaluate.
-    // Append silence so the scheduler runs but emits nothing audible.
-    await window.evaluate(prebakeText + '\nsilence');
+    console.log('[strudel-debug] init: calling initStrudel()');
+    _repl = await initStrudel();
+    console.log('[strudel-debug] init: initStrudel() done');
+
+    // Load the TR909 (and all other drum machine) sample banks.
+    // bank("RolandTR909") in snippet c2 will silently fail unless this index
+    // is fetched first. strudel.b-cdn.net hosts the canonical tidal-drum-machines
+    // pack used by strudel.cc itself.
+    console.log('[strudel-debug] init: loading drum machine sample banks...');
+    await samples('https://strudel.b-cdn.net/tidal-drum-machines.json');
+    console.log('[strudel-debug] init: drum machine banks loaded');
+
+    await window.evaluate(SA_FUNCTIONS);
+    console.log('[strudel-debug] init: SA custom functions registered (trancegate, rlpf, o)');
+
+    await warmupWorklets();
+    console.log('[strudel-debug] init: worklet warmup complete');
+
     _ready = true;
     statusEl.textContent = 'Ready — click Play.';
+    console.log('[strudel-debug] init: ready');
   } catch(e) {
     statusEl.textContent = 'Load error.';
     errorEl.textContent = e?.message || String(e);
-    console.error(e);
+    console.error('[strudel-debug] init error:', e);
   }
 })();
 
-window.stopAll = function() {
-  try { window.hush(); } catch(e) {}
+async function warmupWorklets() {
+  console.log('[strudel-debug] warmup: evaluating silent supersaw to trigger addModule()');
+  await window.evaluate(`s("supersaw").gain(0)`);
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    if (window.__superdoughReady) {
+      console.log('[strudel-debug] warmup: superdough ready signal received');
+      return;
+    }
+  }
+  console.warn('[strudel-debug] warmup: timed out waiting for superdough ready — proceeding anyway');
+}
+
+// Superdough signals readiness via a console.log we intercept below.
+window.__superdoughReady = false;
+(function patchConsoleForWarmup() {
+  const _orig = console.log;
+  console.log = function(...args) {
+    _orig.apply(console, args);
+    if (args.join(' ').includes('superdough] ready')) {
+      window.__superdoughReady = true;
+    }
+  };
+})();
+
+window.stopAll = async function() {
+  // _repl.stop() halts the scheduler (no new events scheduled).
+  // Suspending the AudioContext then immediately cuts the reverb tail —
+  // without this, .room(.7) rings for several seconds after stop.
+  console.log('[strudel-debug] stopAll: calling _repl.stop()');
+  try { _repl ? _repl.stop() : window.hush(); } catch(e) {
+    console.error('[strudel-debug] stopAll error:', e);
+  }
+  try {
+    const ctx = window.getAudioContext?.();
+    if (ctx && ctx.state === 'running') {
+      await ctx.suspend();
+      console.log('[strudel-debug] stopAll: AudioContext suspended — audio cut');
+    }
+  } catch(e) {
+    console.error('[strudel-debug] stopAll suspend error:', e);
+  }
   statusEl.textContent = 'Stopped.';
   errorEl.textContent = '';
 };
@@ -126,17 +196,27 @@ window.playSnippet = async function(id) {
   const code = document.getElementById(id).value.trim();
   statusEl.textContent = 'Starting…';
   errorEl.textContent = '';
+  console.log(`[strudel-debug] play: snippet=${id}`);
   try {
+    // Resume AudioContext here — must happen inside a user gesture (click).
+    // The context is created suspended at page load; the browser only allows
+    // resume() when called synchronously from a user interaction handler.
+    const ctx = window.getAudioContext?.();
+    console.log(`[strudel-debug] play: AudioContext state=${ctx?.state}`);
+    if (ctx && ctx.state === 'suspended') {
+      await ctx.resume();
+      console.log(`[strudel-debug] play: AudioContext resumed, state=${ctx.state}`);
+    }
     const bpm = parseFloat(document.getElementById('bpm').value) || 140;
     _repl.setCps(bpm / 240);
-    // window.evaluate() is Strudel's global evaluator — runs in Strudel scope,
-    // custom functions already registered, AudioContext resumes on this gesture.
+    console.log(`[strudel-debug] play: evaluating code, bpm=${bpm}`);
     await window.evaluate(code);
     statusEl.textContent = 'Playing ▶';
+    console.log(`[strudel-debug] play: snippet ${id} playing`);
   } catch(e) {
     statusEl.textContent = 'Error — see below.';
     errorEl.textContent = e?.message || String(e);
-    console.error(e);
+    console.error('[strudel-debug] play error:', e);
   }
 };
 </script>
