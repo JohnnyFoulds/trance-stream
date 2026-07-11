@@ -422,7 +422,7 @@ def test_cli_stream_no_default_files(tmp_path, monkeypatch):
 
     written_paths = []
 
-    def fake_stream_bars(renderer, n_bars, volume, wav_path):
+    def fake_stream_bars(renderer, n_bars, volume, wav_path, **kwargs):
         if wav_path:
             written_paths.append(wav_path)
         l = np.zeros(n_bars * SPB, dtype=np.float32)
@@ -448,7 +448,7 @@ def test_cli_stream_writes_wav_when_requested(tmp_path, monkeypatch):
 
     captured_wav = []
 
-    def fake_stream_bars(renderer, n_bars, volume, wav_path):
+    def fake_stream_bars(renderer, n_bars, volume, wav_path, **kwargs):
         captured_wav.append(wav_path)
         l = np.zeros(n_bars * SPB, dtype=np.float32)
         r = np.zeros(n_bars * SPB, dtype=np.float32)

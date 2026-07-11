@@ -175,6 +175,99 @@ class SimpleFDN:
         return out_l.astype(np.float32), out_r.astype(np.float32)
 
 
+class SchroederReverb:
+    """Schroeder reverb: 4 parallel comb filters → 2 series all-pass diffusers.
+
+    Uses circular buffers (numpy fancy-index) — O(1) per sample, vectorised
+    over the block.  Fast enough for real-time bar-by-bar rendering.
+
+    Parameters
+    ----------
+    room_size : float
+        [0.0, 1.0].  Default 0.7.
+    wet : float
+        Wet mix level.  Default 0.35.
+    sr : int
+        Sample rate.  Default 44100.
+    """
+
+    _COMB_DELAYS_44K    = [1557, 1617, 1491, 1422]
+    _ALLPASS_DELAYS_44K = [225, 556]
+    _ALLPASS_FB         = 0.5
+
+    def __init__(self, room_size: float = 0.7, wet: float = 0.35,
+                 sr: int = 44100) -> None:
+        scale = sr / 44100.0
+        self._wet = float(wet)
+        self._dry = 1.0 - wet * 0.5
+        self._comb_fb = 0.50 + room_size * 0.42
+
+        self._comb_delays = [max(1, int(d * scale)) for d in self._COMB_DELAYS_44K]
+        self._ap_delays   = [max(1, int(d * scale)) for d in self._ALLPASS_DELAYS_44K]
+
+        # Circular buffers — sized to 2× sr so write never laps unread history
+        cbuf = max(self._comb_delays + self._ap_delays) * 2 + sr
+        self._comb_bufs = [[np.zeros(cbuf, np.float64),
+                            np.zeros(cbuf, np.float64)] for _ in self._comb_delays]
+        self._ap_bufs   = [[np.zeros(cbuf, np.float64),
+                            np.zeros(cbuf, np.float64)] for _ in self._ap_delays]
+        self._comb_ptr  = 0
+        self._ap_ptr    = 0   # shared write pointer (same block size each call)
+        self._ptr       = 0   # single monotonic write pointer for all buffers
+
+    def _comb_block(self, bufs, delay: int, inp: np.ndarray, fb: float) -> np.ndarray:
+        """Vectorised feedback comb filter over one block."""
+        n = len(inp); blen = len(bufs[0])
+        idx = (self._ptr + np.arange(n)) % blen
+        ridx = (self._ptr + np.arange(n) - delay) % blen
+        delayed = bufs[0][ridx]
+        bufs[0][idx] = inp + fb * delayed
+        return delayed.astype(np.float32)
+
+    def _comb_block_stereo(self, bufs, delay, l, r, fb):
+        n = len(l); blen = len(bufs[0])
+        idx  = (self._ptr + np.arange(n)) % blen
+        ridx = (self._ptr + np.arange(n) - delay) % blen
+        dl = bufs[0][ridx]; dr = bufs[1][ridx]
+        bufs[0][idx] = l + fb * dl
+        bufs[1][idx] = r + fb * dr
+        return dl.astype(np.float32), dr.astype(np.float32)
+
+    def _ap_block_stereo(self, bufs, delay, l, r):
+        fb = self._ALLPASS_FB
+        n = len(l); blen = len(bufs[0])
+        idx  = (self._ptr + np.arange(n)) % blen
+        ridx = (self._ptr + np.arange(n) - delay) % blen
+        dl = bufs[0][ridx]; dr = bufs[1][ridx]
+        vl = l + fb * dl; vr = r + fb * dr
+        bufs[0][idx] = vl; bufs[1][idx] = vr
+        return (dl - fb * vl).astype(np.float32), (dr - fb * vr).astype(np.float32)
+
+    def process(self, buf_l: np.ndarray, buf_r: np.ndarray) -> tuple:
+        """Apply reverb.  State persists between calls."""
+        rev_l = np.zeros(len(buf_l), np.float32)
+        rev_r = np.zeros(len(buf_r), np.float32)
+
+        for i, delay in enumerate(self._comb_delays):
+            cl, cr = self._comb_block_stereo(
+                self._comb_bufs[i], delay,
+                buf_l.astype(np.float64), buf_r.astype(np.float64),
+                self._comb_fb)
+            rev_l += cl; rev_r += cr
+        rev_l *= 0.25; rev_r *= 0.25
+
+        for i, delay in enumerate(self._ap_delays):
+            rev_l, rev_r = self._ap_block_stereo(
+                self._ap_bufs[i], delay,
+                rev_l.astype(np.float64), rev_r.astype(np.float64))
+
+        self._ptr = int((self._ptr + len(buf_l)) % len(self._comb_bufs[0][0]))
+
+        out_l = (buf_l * self._dry + rev_l * self._wet).astype(np.float32)
+        out_r = (buf_r * self._dry + rev_r * self._wet).astype(np.float32)
+        return out_l, out_r
+
+
 class Sidechain:
     """Kick-ducking sidechain compressor.
 
@@ -228,9 +321,7 @@ class Sidechain:
             b_coef, a_coef, kick_env, zi=self._env_state)
         kick_env_smooth = kick_env_smooth.astype(np.float32)
 
-        # Normalise so peak kick = full ducking depth.
-        peak = kick_env_smooth.max()
-        kick_env_smooth = np.clip(kick_env_smooth / max(float(peak), 1e-9), 0.0, 1.0)
+        kick_env_smooth = np.clip(kick_env_smooth, 0.0, 1.0)
 
         gain = (1.0 - self._depth * kick_env_smooth).astype(np.float32)
         out_l = (signal_l * gain).astype(np.float32)

@@ -9,6 +9,40 @@ DMCA-safe.
 
 ---
 
+## Vision
+
+**The ultimate goal is Death Angel** — a fully original AI live-coding trance entity with its own identity, style, and generative personality.
+
+Switch Angel (SA) is the current focus because she provides a concrete, measurable target. Matching her sound precisely is the discipline that builds the full stack: synthesis, composition, arrangement, and style parameterisation. Once we can convincingly reproduce SA's output from first principles, everything needed to build something original is in place.
+
+SA is the vehicle. Death Angel is the destination.
+
+---
+
+## Current goal (SA phase)
+
+**Make a listener familiar with trance believe they are hearing Switch Angel playing live — without knowing the music is procedurally generated.**
+
+The reference is Switch Angel (SA): a live-coder who builds trance tracks in real time using Strudel.cc. Her sound fingerprint has been reverse-engineered from OCR analysis of 311 code snapshots across 5 of her YouTube sessions. Every synthesis constant in this project traces back to a measurement from that source.
+
+The target sound requires getting five things right simultaneously:
+
+| Element | SA's approach | This project |
+|---|---|---|
+| **Pad** | 5-voice supersaw, very dark LP filter (~400 Hz), trancegate breathing, FDN reverb, sidechain pump | `instruments/pad.py` — full chain implemented |
+| **Kick** | TR-909 style: 285→50 Hz pitch sweep, tau=31 ms, decay 120 ms | `instruments/drums.py` — confirmed constants |
+| **Sidechain** | Pad/bass duck to ~40% on every kick; `.duckdepth(.6)` | `SIDECHAIN_DEPTH=0.6` in `song/theory.py` |
+| **Trancegate** | Probabilistic binary gate, 16 steps/bar, density=2/3 (SA's rand.mul(1.5).round().seg(16)) | `synth/envelopes.py` |
+| **Chord progression** | C min → D min → Eb maj → F maj (iv–v–bVI–bVII), 4 bars per chord, G natural minor at 140 BPM | `song/theory.py` — SA-confirmed values |
+
+### What is done and what remains
+
+The v3 architecture is structurally correct — all five voices exist, all SA-confirmed constants are in `song/theory.py`, and the arrangement arc (Intro → Groove → Breakdown → Build-up → Drop) is implemented. The remaining gap is **perceptual verification**: the output has not yet been measured against SA's reference for sidechain pump depth, trancegate shape, and filter floor. The constants are right; the measurements are missing.
+
+See `CLAUDE.md` for the prioritised list of parameters still needing output-level verification.
+
+---
+
 ## Quick start
 
 ```bash
@@ -61,7 +95,7 @@ python trance_stream_v3.py [OPTIONS]
                         continues running; the video colours each cell. Press v
                         to cycle through the loaded videos and back to normal CA
                         colour mode.
-                        If omitted, all tools/*_frames.txt files are
+                        If omitted, all ascii_videos/*.txt files are
                         auto-discovered (Bad Apple + Star Wars when both are
                         present). Only active with --stream --viz.
 
@@ -240,10 +274,10 @@ Load specific files or a custom set:
 
 ```bash
 # One file only
-python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt
+python trance_stream_v3.py --stream --viz --ascii-video ascii_videos/bad_apple_frames.txt
 
 # Explicit playlist
-python trance_stream_v3.py --stream --viz --ascii-video tools/bad_apple_frames.txt tools/starwars_15fps_frames.txt
+python trance_stream_v3.py --stream --viz --ascii-video ascii_videos/bad_apple_frames.txt ascii_videos/starwars_15fps_frames.txt
 ```
 
 The overlay uses cover scaling: the video always fills the entire CA area with
@@ -387,6 +421,36 @@ for the full synthesis parameter reference.
 
 TranceStream does not copy or depend on her code. The research was used to
 understand the target synthesis chain; all code is original.
+
+---
+
+## Research and application value
+
+### What this project is actually doing
+
+At its core, this is **analysis-by-synthesis** — hypothesize a parametric model of a musical style, then falsify or refine it by comparing synthesized output against the original. That is a scientific method applied to music.
+
+### Research value
+
+**Computational musicology with teeth.** Most music analysis describes what it hears subjectively — "warm", "punchy", "euphoric". This process forces those descriptions into measurable, reproducible parameters: spectral centroid, sidechain depth ratios, filter sweep curves. That is a methodology contribution, not just a personal project.
+
+**Style as a mathematical object.** If you can fully parameterize a musical style without copying any audio, you have shown that *style* is separable from *content* in a formal sense. That has implications for copyright theory, generative music, and how we think about artistic identity.
+
+**Interpretable music generation.** The dominant paradigm in AI music (Suno, Udio, etc.) is latent-space black boxes. An analysis-by-synthesis approach produces something you can read, edit, and reason about. A trance generator where every parameter traces back to a measurement is the opposite of a black box — and far more useful for music producers who want control.
+
+**Verification methodology.** The discipline enforced here — measure first, no excuses for untested work — is itself a methodology. Most audio tools are evaluated by ear, which is unreproducible. Building a measurable acceptance bar (CLAP scores, spectral comparisons, RMS envelopes) is a transferable framework for the broader field.
+
+### Application value
+
+**Procedural audio at style fidelity.** Games and interactive media need music that adapts in real time. The ability to generate infinite variation within a precisely parameterized style — without licensing existing recordings — is commercially valuable and technically unsolved at this level of fidelity.
+
+**Live performance systems.** The Death Angel vision — a machine that *performs* rather than plays back — touches HCI and music technology research around agency, responsiveness, and what "live" means for a generative system.
+
+**Synthesis education.** Deconstructing a real, commercially successful sound into its constituent parameters is a far more motivating way to teach synthesis than abstract textbook examples. This project is an implicit curriculum.
+
+---
+
+The personal curiosity is the engine, but the output — a reproducible, measured, parametric model of a musical style — would stand on its own in a music information retrieval or music technology research context. The discipline imposed throughout (cite everything, measure everything, document everything) is exactly what separates a research contribution from a hobby project.
 
 ---
 

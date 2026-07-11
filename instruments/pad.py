@@ -33,7 +33,8 @@ class SupersawPad:
                  detune_cents: float = 60.0,
                  room_size: float = 0.7,
                  saw_count: int = 5,
-                 voicing_offsets: list = None):
+                 voicing_offsets: list = None,
+                 bpm: float = 140.0):
         from song.theory import GAIN_PAD
         from synth.effects import SimpleFDN
 
@@ -45,6 +46,7 @@ class SupersawPad:
         self.saw_count     = saw_count
         self._fdn          = SimpleFDN(room_size=room_size, sr=sr)
         self._voicing_offsets = voicing_offsets  # None = use PAD_VOICING_OFFSETS from theory
+        self.bpm           = bpm
         self._osc_phases   = None  # shape (n_voices, saw_count), initialised on first render
         self._lpf_zi_l     = None  # LP filter state persisted across bars
         self._lpf_zi_r     = None
@@ -83,12 +85,12 @@ class SupersawPad:
         from synth.oscillators import supersaw
         from synth.filters import lpf2, rlpf_to_hz
         from synth.envelopes import trancegate
-        from song.theory import (PAD_VOICING_OFFSETS, TRANCEGATE_SPEED,
-                                  TRANCEGATE_AMOUNT, samples_per_bar)
+        from song.theory import (PAD_VOICING_OFFSETS, TRANCEGATE_DENSITY,
+                                  TRANCEGATE_FLOOR, TRANCEGATE_SEED, samples_per_bar)
 
         slider = cutoff_slider if cutoff_slider is not None else self.cutoff_slider
         g      = gain if gain is not None else self.gain
-        spb    = samples_per_bar()
+        spb    = samples_per_bar(bpm=self.bpm)
         cutoff = rlpf_to_hz(slider)
 
         buf_l = np.zeros(n_samples, dtype=np.float32)
@@ -193,7 +195,8 @@ class SupersawPad:
         # for per-step rendering (used by lead; pad always passes 0).
         gate = trancegate(n_samples, self.sr, spb,
                           bar_offset_samples=global_offset_samples + bar_offset_samples,
-                          speed=TRANCEGATE_SPEED, amount=TRANCEGATE_AMOUNT)
+                          density=TRANCEGATE_DENSITY, floor=TRANCEGATE_FLOOR,
+                          seed=TRANCEGATE_SEED)
         buf_l *= gate
         buf_r *= gate
 

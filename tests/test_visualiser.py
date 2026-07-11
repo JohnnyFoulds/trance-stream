@@ -156,7 +156,7 @@ class TestTickOverlayPassesHitMap:
         """Run tick() capturing stdout, return stripped full output."""
         import io
         import unittest.mock as mock
-        dummy_playlist = [([[' ' * 60] * 32], 30, 60, 32)]
+        dummy_playlist = [([[' ' * 60] * 32], 30, 60, 32, 1.0)]
         self.viz._av_playlist = dummy_playlist
         self.viz._av_playlist_idx = 0 if overlay else -1
         self.viz._ascii_video_start_time = None
@@ -242,8 +242,8 @@ class TestNarrowLayout:
 # ---------------------------------------------------------------------------
 
 def _dummy_video(n: int = 1) -> tuple:
-    """Return a minimal (frames, fps, w, h) tuple for testing."""
-    return ([[' ' * 10] * 5] * n, 15, 10, 5)
+    """Return a minimal (frames, fps, w, h, fill) tuple for testing."""
+    return ([[' ' * 10] * 5] * n, 15, 10, 5, 1.0)
 
 
 class TestPlaylistCycling:
@@ -323,3 +323,28 @@ class TestPlaylistCycling:
         self.viz._av_playlist = [vid]
         self.viz._av_playlist_idx = 0
         assert self.viz._current_av is vid
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery: visualiser globs ascii_videos/, not tools/
+# ---------------------------------------------------------------------------
+
+class TestAutoDiscoveryGlobPath:
+    """Visualiser._init_ fallback glob must search ascii_videos/ relative to repo root."""
+
+    def test_glob_targets_ascii_videos_dir(self):
+        """When _av_playlist is empty, start() must glob ascii_videos/ not tools/."""
+        import inspect
+        import visualiser as _vis_mod
+        src = inspect.getsource(_vis_mod.Visualiser.start)
+        assert 'ascii_videos' in src, (
+            "Visualiser.start() must glob ascii_videos/, not tools/"
+        )
+        # The glob call itself must not reference 'tools'
+        glob_line = next(
+            (l for l in src.splitlines() if 'glob.glob' in l or "glob(os.path" in l),
+            ''
+        )
+        assert 'tools' not in glob_line, (
+            f"Glob pattern must not reference tools/ directory, got: {glob_line!r}"
+        )

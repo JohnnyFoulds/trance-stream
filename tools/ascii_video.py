@@ -17,6 +17,62 @@ import re
 from pathlib import Path
 
 
+def content_fill_ratio(frames: list[list[str]], width: int) -> float:
+    """Return the fraction of canvas width actually used by non-space content.
+
+    Samples up to 20 frames.  Used to distinguish full-frame art (ratio ≈ 1.0,
+    e.g. Bad Apple) from logo-on-canvas art (ratio < 1.0, e.g. Death Angel).
+    """
+    if not frames or width == 0:
+        return 1.0
+    step = max(1, len(frames) // 20)
+    max_col = 0
+    for frame in frames[::step]:
+        for row in frame:
+            stripped = row.rstrip()
+            if stripped.strip():
+                max_col = max(max_col, len(stripped))
+    return min(1.0, max_col / width)
+
+
+def crop_to_content(frames: list[list[str]]) -> tuple[list[list[str]], int, int]:
+    """Crop all frames to the tightest bounding box that contains non-space content.
+
+    Returns (cropped_frames, new_width, new_height).  Used to strip blank padding
+    from logo-style art so contain-mode scaling actually fills the display area.
+    """
+    if not frames:
+        return frames, 0, 0
+
+    min_col, max_col, min_row, max_row = 10**9, 0, 10**9, 0
+    for frame in frames:
+        for ri, row in enumerate(frame):
+            stripped_r = row.rstrip()
+            if stripped_r.strip():
+                max_col = max(max_col, len(stripped_r))
+                min_col = min(min_col, len(row) - len(row.lstrip()))
+                max_row = max(max_row, ri)
+                min_row = min(min_row, ri)
+
+    if max_col == 0:
+        return frames, len(frames[0][0]) if frames and frames[0] else 0, len(frames[0]) if frames else 0
+
+    new_w = max_col - min_col
+    new_h = max_row - min_row + 1
+    cropped = []
+    for frame in frames:
+        rows = []
+        for ri in range(min_row, max_row + 1):
+            row = frame[ri] if ri < len(frame) else ''
+            row = row[min_col:max_col]
+            d = new_w - len(row)
+            if d > 0:
+                row = row + ' ' * d
+            rows.append(row)
+        cropped.append(rows)
+    return cropped, new_w, new_h
+
+
 def load_frames(path: str) -> tuple[list[list[str]], int, int, int]:
     """Load a frame file and return (frames, fps, width, height).
 

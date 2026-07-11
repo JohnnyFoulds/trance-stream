@@ -321,12 +321,12 @@ def test_fast_arc_has_earlier_stages_than_slow():
     if not fast_songs or not slow_songs:
         pytest.skip("No seeds produced both 'fast' and 'slow' arcs in current test set")
 
-    fast_lead_on = min(s.stage_bars['lead_melody_on'] for s in fast_songs)
-    slow_lead_on = max(s.stage_bars['lead_melody_on'] for s in slow_songs)
+    fast_vals = [s.stage_bars['lead_melody_on'] for s in fast_songs]
+    slow_vals = [s.stage_bars['lead_melody_on'] for s in slow_songs]
 
-    assert fast_lead_on <= slow_lead_on, (
-        f"Fast arc lead_melody_on ({fast_lead_on}) should not exceed "
-        f"slow arc lead_melody_on ({slow_lead_on})"
+    assert max(fast_vals) < min(slow_vals), (
+        f"Fast arc lead_melody_on max ({max(fast_vals)}) must be strictly less than "
+        f"slow arc lead_melody_on min ({min(slow_vals)})"
     )
 
 
@@ -365,9 +365,9 @@ def test_wide_detune_pad_has_higher_spectral_spread():
         centroid_tight = float((freqs * pw_tight).sum() / pw_tight.sum())
         centroid_wide  = float((freqs * pw_wide ).sum() / pw_wide.sum())
         # Wide detuning creates intermodulation that enriches high mids
-        assert centroid_wide >= centroid_tight * 0.95, (
-            f"Wide detune centroid ({centroid_wide:.0f} Hz) should not be "
-            f"much lower than tight detune centroid ({centroid_tight:.0f} Hz)"
+        assert centroid_wide > centroid_tight * 1.01, (
+            f"Wide detune centroid ({centroid_wide:.0f} Hz) must exceed "
+            f"tight detune centroid ({centroid_tight:.0f} Hz) by >1%"
         )
 
     # Energy in 1–5 kHz band (beating zone) should be higher for wide detune

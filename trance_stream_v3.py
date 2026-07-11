@@ -72,26 +72,37 @@ def main():
     parser.add_argument("--ascii-video", nargs='*', default=None, metavar="PATH",
                         help="Pre-rendered ASCII video frame file(s) to use as CA color overlay. "
                              "Multiple paths supported; press 'v' to cycle through them. "
-                             "If omitted, all tools/*_frames.txt files are auto-discovered. "
-                             "Only active with --viz --stream.")
+                             "If omitted or passed with no arguments, all ascii_videos/*.txt files "
+                             "are auto-discovered. Only active with --viz --stream.")
     parser.add_argument("--solo", nargs="+", metavar="TRACK",
                         help="Solo one or more tracks; all others are muted. "
                              "Track names: kick pad lead bass hihat clap pulse")
     parser.add_argument("--mute", nargs="+", metavar="TRACK",
                         help="Mute one or more tracks. "
                              "Track names: kick pad lead bass hihat clap pulse")
+    parser.add_argument("--style", default=None,
+                        choices=["hey_angel"],
+                        help="Style variant (default: procedural trance). "
+                             "hey_angel: half-time kick, bass portamento G1→F2, "
+                             "C4→F#3 chromatic melody, high pluck E5, deep sidechain.")
     args = parser.parse_args()
 
     n_bars = args.bars if args.bars is not None else (None if args.stream else 128)
-    print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
-          f"bpm={args.bpm}  bars={'∞' if n_bars is None else n_bars}")
 
     # Build song
     print("Building song...")
     t0 = time.time()
-    from song.builder import build_song
-    song = build_song(args.seed, mood=args.mood, bpm=args.bpm,
-                      total_bars=n_bars or 128)
+    if args.style == 'hey_angel':
+        from song.builder import build_hey_angel_song
+        song = build_hey_angel_song(total_bars=n_bars or 128)
+        print(f"trance_stream_v3  style=hey_angel  bpm={song.bpm}  "
+              f"bars={'∞' if n_bars is None else n_bars}")
+    else:
+        print(f"trance_stream_v3  seed={args.seed!r}  mood={args.mood}  "
+              f"bpm={args.bpm}  bars={'∞' if n_bars is None else n_bars}")
+        from song.builder import build_song
+        song = build_song(args.seed, mood=args.mood, bpm=args.bpm,
+                          total_bars=n_bars or 128)
     print(f"  root={_midi_name(song.root_midi)}  "
           f"scale={_scale_name(song.scale)}  "
           f"tracks={[t.instrument_type for t in song.tracks]}")
@@ -123,10 +134,15 @@ def main():
     wav_path  = args.wav  or (None if args.stream else "/tmp/trance_v3.wav")
     midi_path = args.out_midi or (None if args.stream else "/tmp/trance_v3.mid")
 
+    ascii_video_paths = args.ascii_video
+    if ascii_video_paths is None or ascii_video_paths == []:
+        import glob as _glob
+        ascii_video_paths = sorted(_glob.glob(str(REPO_ROOT / "ascii_videos" / "*.txt"))) or None
+
     if args.stream:
         buf_l, buf_r = _stream_bars(renderer, n_bars, args.volume, wav_path,
                                     use_viz=args.viz,
-                                    ascii_video_paths=args.ascii_video)
+                                    ascii_video_paths=ascii_video_paths)
     else:
         print(f"Rendering {n_bars} bars...")
         buf_l, buf_r = renderer.render_bars(n_bars)
@@ -291,19 +307,23 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
     def render_thread():
         bar_idx   = renderer._bar   # may be non-zero after --from-bar fast-forward
         bars_done = 0
-        while not stop_event.is_set():
-            if n_bars is not None and bars_done >= n_bars:
-                break
-            t0 = time.time()
-            bar_l, bar_r = renderer._render_bar()
-            if volume != 1.0:
-                bar_l = bar_l * volume
-                bar_r = bar_r * volume
-            render_ms = (time.time() - t0) * 1000
-            audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
-            bar_idx  += 1
-            bars_done += 1
-        audio_queue.put(SENTINEL)
+        try:
+            while not stop_event.is_set():
+                if n_bars is not None and bars_done >= n_bars:
+                    break
+                t0 = time.time()
+                bar_l, bar_r = renderer._render_bar()
+                if volume != 1.0:
+                    bar_l = bar_l * volume
+                    bar_r = bar_r * volume
+                render_ms = (time.time() - t0) * 1000
+                audio_queue.put((bar_idx, bar_l, bar_r, render_ms))
+                bar_idx  += 1
+                bars_done += 1
+        except (KeyboardInterrupt, Exception):
+            pass
+        finally:
+            audio_queue.put(SENTINEL)
 
     render_t = threading.Thread(target=render_thread, daemon=True)
     render_t.start()
@@ -324,12 +344,15 @@ def _stream_bars(renderer: 'SongRenderer', n_bars: int | None, volume: float,
 
         av_playlist = []
         if ascii_video_paths:
-            from ascii_video import load_frames as _load_av
+            from ascii_video import load_frames as _load_av, content_fill_ratio as _fill_ratio, crop_to_content as _crop
             for path in ascii_video_paths:
                 frames, fps, w, h = _load_av(path)
                 if frames:
-                    av_playlist.append((frames, fps, w, h))
-                    print(f"  ASCII video: {len(frames)} frames @ {fps}fps  ({w}×{h})  {path}")
+                    fill = _fill_ratio(frames, w)
+                    if fill < 0.9:
+                        frames, w, h = _crop(frames)
+                    av_playlist.append((frames, fps, w, h, fill))
+                    print(f"  ASCII video: {len(frames)} frames @ {fps}fps  ({w}×{h})  fill={fill:.0%}  {path}")
 
         viz = Visualiser(renderer.song, n_bars, ascii_video_playlist=av_playlist)
         viz.start()

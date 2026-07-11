@@ -120,6 +120,29 @@ window.__debug = { get repl() { return _repl; }, get ready() { return _ready; } 
     _repl = await initStrudel();
     console.log('[strudel-debug] init: initStrudel() done');
 
+    // Tap Strudel's AudioContext for WAV capture.
+    // Strudel captures the AudioContext constructor at module-load time, so patching
+    // window.AudioContext (as __capturerSetup does) never intercepts it. Instead we
+    // use window.getAudioContext() — set by initStrudel() — to get the real context,
+    // create an analyser, connect it to the destination, and patch createGain so all
+    // future gain nodes (created on snippet play) pipe into the analyser.
+    ;(function capturerSetupDirect() {
+      const ac = window.getAudioContext?.();
+      if (!ac) { console.warn('[strudel-debug] captureSetup: getAudioContext() returned null — WAV capture unavailable'); return; }
+      window.__captureAC = ac;
+      const analyser = ac.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.connect(ac.destination);
+      window.__captureAnalyser = analyser;
+      const _origCG = ac.createGain.bind(ac);
+      ac.createGain = function() {
+        const g = _origCG();
+        g.connect(analyser);
+        return g;
+      };
+      console.log('[strudel-debug] captureSetup: tapped AudioContext for WAV capture');
+    })();
+
     // Load the TR909 (and all other drum machine) sample banks.
     // bank("RolandTR909") in snippet c2 will silently fail unless this index
     // is fetched first. strudel.b-cdn.net hosts the canonical tidal-drum-machines
@@ -189,6 +212,71 @@ window.stopAll = async function() {
   }
   statusEl.textContent = 'Stopped.';
   errorEl.textContent = '';
+};
+
+// WAV capture via AnalyserNode polling.
+//
+// The AnalyserNode tap must be set up BEFORE Strudel creates the AudioContext,
+// which is why __capturerSetup() monkey-patches the AudioContext constructor.
+// Call window.__capturerSetup() once at page load, then window.__captureWav(secs)
+// later to capture audio. The analyser receives audio because createGain is patched
+// to connect every gain to the capture analyser — same technique as test_strudel_page.py.
+window.__captureAnalyser = null;
+window.__capturerSetup = function() {
+  const _origAC = window.AudioContext;
+  window.AudioContext = function(...args) {
+    const ac = new _origAC(...args);
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.connect(ac.destination);
+    window.__captureAnalyser = analyser;
+    window.__captureAC = ac;
+    const _origCG = ac.createGain.bind(ac);
+    ac.createGain = function() {
+      const g = _origCG();
+      g.connect(analyser);
+      return g;
+    };
+    return ac;
+  };
+  console.log('[strudel-debug] capturerSetup: AudioContext patched for WAV capture');
+};
+window.__capturerSetup();
+
+window.__captureWav = function(seconds) {
+  return new Promise((resolve, reject) => {
+    const analyser = window.__captureAnalyser;
+    const ac = window.__captureAC;
+    if (!analyser || !ac) { reject(new Error('Capture analyser not ready — ensure page loaded and __capturerSetup ran')); return; }
+    const sr = ac.sampleRate;
+    const frameSize = analyser.fftSize;
+    const targetSamples = Math.ceil(seconds * sr);
+    const frameDurationMs = (frameSize / sr) * 1000;
+    const captured = [];
+    let totalSamples = 0;
+
+    const buf = new Float32Array(frameSize);
+    const interval = setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      captured.push(buf.slice());
+      totalSamples += frameSize;
+      if (totalSamples >= targetSamples) {
+        clearInterval(interval);
+        const flat = new Float32Array(targetSamples);
+        let offset = 0;
+        for (const chunk of captured) {
+          const take = Math.min(chunk.length, targetSamples - offset);
+          flat.set(chunk.subarray(0, take), offset);
+          offset += take;
+          if (offset >= targetSamples) break;
+        }
+        console.log(`[strudel-debug] captureWav: captured ${flat.length} samples at ${sr}Hz`);
+        resolve({ samples: Array.from(flat), sampleRate: sr });
+      }
+    }, frameDurationMs);
+
+    console.log(`[strudel-debug] captureWav: polling ${seconds}s at ${sr}Hz (frame=${frameSize})`);
+  });
 };
 
 window.playSnippet = async function(id) {

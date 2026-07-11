@@ -102,7 +102,7 @@ def make_bar_info(bar_idx: int, song, render_ms: float, bar_dur_ms: float) -> Ba
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     from song.arcs import filter_cutoff_arc, fm_depth_arc, chord_state_at
-    from song.theory import rlpf_to_hz, chord_to_midi, TRANCEGATE_SPEED
+    from song.theory import rlpf_to_hz, chord_to_midi
 
     # Chord index — phase-aware, matches SongRenderer exactly
     prog, weights, effective_root = chord_state_at(bar_idx, song)
@@ -123,11 +123,10 @@ def make_bar_info(bar_idx: int, song, render_ms: float, bar_dur_ms: float) -> Ba
     filter_hz = rlpf_to_hz(slider)
     fm_depth = fm_depth_arc(bar_idx)
 
-    # Trancegate: where in the cycle are we at bar start?
-    # Phase = (bar_idx * spb) / gate_period_samples, mod 1.0
+    # Trancegate: binary gate model has no continuous phase.
+    # gate_phase is unused in display; keep at 0.0 for BarInfo compatibility.
     spb = int(song.sr * 4 * 60 / song.bpm)
-    gate_period = spb / TRANCEGATE_SPEED
-    gate_phase = (bar_idx * spb % gate_period) / gate_period
+    gate_phase = 0.0
 
     # Which tracks are active this bar?
     sb = song.stage_bars
@@ -249,7 +248,7 @@ class Visualiser:
 
     @property
     def _current_av(self):
-        """Return (frames, fps, w, h) for the active video, or None."""
+        """Return (frames, fps, w, h, fill) for the active video, or None."""
         if self._av_playlist_idx < 0 or not self._av_playlist:
             return None
         return self._av_playlist[self._av_playlist_idx]
@@ -269,18 +268,22 @@ class Visualiser:
         except Exception:
             self._stdin_fd = None
 
-        # Auto-discover all *_frames.txt in the tools directory when no
-        # explicit playlist was provided via the constructor.
+        # Auto-discover all *.txt in ascii_videos/ when no explicit playlist
+        # was provided via the constructor.
         if not self._av_playlist:
             import glob
             tools_dir = os.path.dirname(os.path.abspath(__file__))
+            repo_dir = os.path.dirname(tools_dir)
             sys.path.insert(0, tools_dir)
-            from ascii_video import load_frames
-            for path in sorted(glob.glob(os.path.join(tools_dir, '*_frames.txt'))):
+            from ascii_video import load_frames, content_fill_ratio, crop_to_content
+            for path in sorted(glob.glob(os.path.join(repo_dir, 'ascii_videos', '*.txt'))):
                 try:
                     frames, fps, w, h = load_frames(path)
                     if frames:
-                        self._av_playlist.append((frames, fps, w, h))
+                        fill = content_fill_ratio(frames, w)
+                        if fill < 0.9:
+                            frames, w, h = crop_to_content(frames)
+                        self._av_playlist.append((frames, fps, w, h, fill))
                 except Exception:
                     pass
 
@@ -316,7 +319,7 @@ class Visualiser:
 
         av = self._current_av
         if av is not None:
-            av_frames, av_fps, _av_w, _av_h = av
+            av_frames, av_fps, _av_w, _av_h, _av_fill = av
             # Advance frame index by wall clock then do a full redraw
             now = time.monotonic()
             if self._ascii_video_start_time is None:
@@ -584,36 +587,57 @@ class Visualiser:
         av_scaled_w = av_scaled_h = 1
         av_w = av_h = 1   # overridden below when a video is active
         _cur_av = self._current_av
+        # Whether this video uses contain+transparent or cover+opaque rendering.
+        av_contain = False
+
         if _cur_av is not None:
-            _av_frames, _av_fps, av_w, av_h = _cur_av
+            _av_frames, _av_fps, av_w, av_h, av_fill = _cur_av
             frame_idx = self._ascii_video_frame_idx % len(_av_frames)
             av_frame = _av_frames[frame_idx]
 
-            # Cover mode: always fill the entire CA area, center-crop excess.
-            # No bars ever — every cell gets a video color. This is correct for
-            # an overlay texture: bars (uncovered cells) look worse than a crop.
-            # Cell ratio 0.5 cancels identically in both axes, so we work in
-            # plain char-count space: scale = max(ca_inner/src_w, ca_lines/src_h).
-            scale = max(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
-
-            av_scaled_w = max(ca_inner, int(av_w * scale))
-            av_scaled_h = max(ca_lines, int(av_h * scale))
-
-            # Center-crop offsets (into the scaled source)
-            av_col_src_start = (av_scaled_w - ca_inner) / 2.0
-            av_row_src_start = (av_scaled_h - ca_lines) / 2.0
+            # Full-frame art (fill ≥ 0.9, e.g. Bad Apple, Star Wars): cover mode.
+            #   Scale to fill the CA area, center-crop excess, space = opaque dim-blue.
+            # Logo art (fill < 0.9, e.g. Death Angel): contain mode.
+            #   Scale to fit entirely, center on both axes, space = transparent CA.
+            # Cell aspect ratio 0.5 cancels in both axes; work in char-count space.
+            if av_fill >= 0.9:
+                scale = max(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1))
+                av_scaled_w = max(ca_inner, int(av_w * scale))
+                av_scaled_h = max(ca_lines, int(av_h * scale))
+                av_col_src_start = (av_scaled_w - ca_inner) / 2.0
+                av_row_src_start  = (av_scaled_h - ca_lines) / 2.0
+            else:
+                av_contain = True
+                # Scale logo to 75% of the CA area so it has padding on all sides.
+                # The remaining 25% margin fills with _av_color(' ') = dim-blue,
+                # matching the logo's own background for a coherent canvas.
+                _LOGO_FILL = 0.75
+                scale = min(ca_inner / max(av_w, 1), ca_lines / max(av_h, 1)) * _LOGO_FILL
+                av_scaled_w = max(1, int(av_w * scale))
+                av_scaled_h = max(1, int(av_h * scale))
+                av_col_src_start = -(ca_inner - av_scaled_w) / 2.0
+                av_row_src_start  = -(ca_lines - av_scaled_h) / 2.0
 
         def _av_colored_row(raw: str, display_row: int) -> str:
-            """Color every cell in a CA row using the current video frame."""
+            """Color every CA cell using the video frame palette.
+
+            Only the ANSI color/brightness is changed; the CA character (ch)
+            is always preserved.  See CLAUDE.md: 'colors only, never alter
+            the display character'.
+            """
+            _bg = _av_color(' ')   # dim-blue — used for all margin/background cells
             src_r = display_row + av_row_src_start
-            src_row_idx = min(int(src_r / av_scaled_h * av_h),
-                              av_h - 1)
+            if av_contain and (src_r < 0 or src_r >= av_scaled_h):
+                return f'{_bg}{"".join(ch + _RESET + _bg for ch in raw)}{_RESET}'
+            src_row_idx = min(int(src_r / av_scaled_h * av_h), av_h - 1)
             src_line = av_frame[src_row_idx] if src_row_idx < len(av_frame) else ''
             chars = []
             for col_idx, ch in enumerate(raw):
                 src_c = col_idx + av_col_src_start
-                src_col_idx = min(int(src_c / av_scaled_w * av_w),
-                                  av_w - 1)
+                if av_contain and (src_c < 0 or src_c >= av_scaled_w):
+                    chars.append(f'{_bg}{ch}{_RESET}')
+                    continue
+                src_col_idx = min(int(src_c / av_scaled_w * av_w), av_w - 1)
                 src_ch = src_line[src_col_idx] if src_col_idx < len(src_line) else ' '
                 chars.append(f'{_av_color(src_ch)}{ch}{_RESET}')
             return ''.join(chars)
@@ -657,7 +681,7 @@ class Visualiser:
 
             if age == 1 and av_frame is None:
                 # Newest row label only in default mode
-                cells_w = ca_inner - len(label_txt)
+                cells_w = max(ca_inner - len(label_txt), 0)
                 ca_color = _CA_PALETTE[chord_idx % len(_CA_PALETTE)]
                 bright = _DIM if fslider < 0.5 else (_BOLD if fslider > 0.7 else '')
                 ca_rendered.append(
@@ -723,14 +747,25 @@ def _strip_ansi(s: str) -> str:
 
 # Characters ordered roughly by visual density (darkest → brightest).
 # Used to map ASCII video source pixels to ANSI brightness in overlay mode.
-_AV_DARK   = set(' .,`\'":;-_')
-_AV_MID    = set('!|/\\()[]{}+~?<>^*')
-_AV_BRIGHT = set('#@%MW&$X08B')
+# Four distinct tiers give a visible gradient in logo rain animations:
+#   space/background → dim-blue  (recedes into background)
+#   fade chars (.,)  → dim-cyan  (visible fade trail, distinct from background)
+#   mid chars (+|/)  → cyan      (active rain, bright mid-tone)
+#   solid chars (#@) → bold-white (logo body, maximum brightness)
+_AV_BACKGROUND = set(' ')
+_AV_FADE       = set('.,:;`\'"-_')
+_AV_MID        = set('!|/\\()[]{}+~?<>^*')
+_AV_BRIGHT     = set('#@%MW&$X08B')
+
+_DIM_BLUE = _DIM + '\033[34m'
+_DIM_CYAN = _DIM + '\033[36m'
 
 def _av_color(src_ch: str) -> str:
     """Map an ASCII video source character to an ANSI color code for overlay."""
     if src_ch in _AV_BRIGHT:
         return _BOLD + _WHITE
-    if src_ch in _AV_DARK:
-        return _DIM + '\033[34m'   # dim blue — dark regions recede
-    return _CYAN                   # mid chars get cyan
+    if src_ch in _AV_MID:
+        return _CYAN
+    if src_ch in _AV_FADE:
+        return _DIM_CYAN          # visible fade trail — distinct from background
+    return _DIM_BLUE              # space/background — recedes

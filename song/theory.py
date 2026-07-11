@@ -103,6 +103,9 @@ BASS_STEPS_B = [0, 2, 5, 7, 10, 13, 15]  # 7-hit syncopated, no consecutive step
 # Source: docs/music_theory/03_trance_rhythm.md §1
 KICK_STEPS_BASIC      = [0, 4, 8, 12]          # four-on-floor
 KICK_STEPS_SYNCOPATED = [0, 4, 8, 11, 14]      # SA's trance pump pattern
+# "Hey Angel…" half-time feel: kick on half-notes only, confirmed from sub-bass peak detection
+# (reference: research/analysis/hey_angel_analysis.md §1)
+KICK_STEPS_HALFTIME   = [0, 8]                  # half-time: kick on half-notes only
 CLAP_STEPS_BACKBEAT   = [4, 12]                # beats 2 and 4
 CLAP_STEPS_SYNCOPATED = [0, 4, 8, 11, 14]     # matches kick (some SA sessions)
 HIHAT_STEPS           = list(range(16))        # all 16th notes (full pattern)
@@ -116,10 +119,13 @@ HIHAT_DECAY_S_MAX     = 0.12
 # TRANCEGATE
 # ---------------------------------------------------------------------------
 
-# Source: docs/music_theory/03_trance_rhythm.md §4
-TRANCEGATE_SPEED  = 1.5    # cycles per bar — creates 3/2 polyrhythm vs 4/4
-TRANCEGATE_ANGLE  = 45.0   # degrees — cosine shape, equal rise/fall time
-TRANCEGATE_AMOUNT = 0.7    # depth: trough=0.3, peak=1.0 — breathes without going silent
+# Source: research/strudel_debug.html — SA's trancegate(1, 45, 1) Strudel source
+# rand.mul(density+0.5).round().seg(16): binary 16-slot gate, P(on) = P(rand*1.5 >= 0.5) ≈ 2/3
+# seed=45: SA's confirmed seed arg from OCR session GWXCCBsOMSg
+# floor=0.3: deliberate departure from SA's clip(.7); avoids hard transients into FDN reverb
+TRANCEGATE_DENSITY = 0.667   # P(slot on) ≈ 2/3
+TRANCEGATE_FLOOR   = 0.7     # SA's .clip(.7) — raised from 0.3 per EXP-018 hypothesis
+TRANCEGATE_SEED    = 45      # SA's seed argument
 
 # ---------------------------------------------------------------------------
 # SIDECHAIN
@@ -129,6 +135,9 @@ TRANCEGATE_AMOUNT = 0.7    # depth: trough=0.3, peak=1.0 — breathes without go
 # SA's confirmed .duck().duckattack(.16).duckdepth(.6)
 SIDECHAIN_DEPTH    = 0.6    # pad reduces to 0.4 gain on kick hit
 SIDECHAIN_ATTACK_S = 0.16   # recovery time constant (exponential)
+# "Hey Angel…" measured peak-to-min duck: floor=0.279 → depth=0.721 → -11.1dB
+# (reference: research/analysis/hey_angel_analysis.md §5)
+SIDECHAIN_DEPTH_HEY_ANGEL = 0.721
 
 # ---------------------------------------------------------------------------
 # GAIN VALUES

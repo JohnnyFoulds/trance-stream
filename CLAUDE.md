@@ -26,6 +26,27 @@ should make it possible without re-doing the diagnosis. The standard is:
 | Architecture decisions | `docs/decisions/` |
 | Tool usage / CLI reference | inline in the tool file as module docstring |
 
+### Citation requirement — APA 7th edition
+
+**Any algorithm, model, dataset, or external technique referenced in a research document
+must be cited in APA 7th edition format.** This is non-negotiable.
+
+Format for journal articles:
+```
+Author, A. A., & Author, B. B. (Year). Title of article. Journal Name, Volume(Issue), pages. https://doi.org/xxx
+```
+Format for conference papers:
+```
+Author, A. A. (Year). Title of paper. In Proceedings of Conference Name (pp. x–x). Publisher. https://doi.org/xxx
+```
+Format for software/datasets:
+```
+Author, A. A. (Year). Name of software (Version x.x) [Software]. Publisher. URL or DOI
+```
+
+Required for (non-exhaustive list): PYIN, YIN, Demucs, HTDemucs, librosa, Karplus-Strong,
+Krumhansl-Schmuckler, spectral flux, MUSDB18, any neural network model used for analysis.
+
 ### Artifacts belong in the repo
 
 Any file referenced in methodology docs must be committed to the repo alongside
@@ -56,6 +77,16 @@ This applies universally:
 3. If PASS: report to the user with the evidence.
 4. If FAIL: iterate — do not ask the user to test a broken thing.
 
+## Project vision and current goal
+
+**Ultimate goal: Death Angel** — a fully original AI live-coding trance entity with its own identity, style, and generative personality. Not a clone of anyone. Something new.
+
+**Current phase: synthesise Switch Angel (SA).** SA is the vehicle, not the destination. Matching her sound precisely is the discipline that builds the full stack — synthesis, composition, arrangement, style parameterisation — needed to eventually build something original. SA gives us a concrete, measurable target so we are not just tuning parameters into the void.
+
+**Current acceptance bar (SA phase):** a listener familiar with trance identifies the output as Switch Angel's style within 15 seconds, without knowing it is procedurally generated (BR-1, `docs/feature-spec.md`).
+
+Design note: keep SA-specific constants isolated in `song/theory.py`. When a constant is SA-specific scaffolding rather than a general synthesis principle, note it — those are the values that will be replaced when we move to Death Angel's own style.
+
 ## Synthesis targets
 
 This project synthesises Switch Angel's trance style. All parameters should be traceable to measurements from her YouTube videos or her published code at github.com/switchangel/strudel-scripts.
@@ -75,13 +106,65 @@ secondary sources. The debug page runs the real code.
 The full workflow (when to use it, how to measure each parameter, how to compare
 against the generator's output) is documented in `research/STRUDEL_DEBUG_PAGE.md`.
 
-Priority parameters still to be measured and matched (in order of perceptual impact):
-1. Sidechain pump depth — `duckdepth(.6)` → expect duck ratio ~0.40; v2 has 0.08
-2. Trancegate breathing — smooth cosine, peak/trough > 5×; v2 uses binary LFSR
-3. Filter floor — `rlpf(0.5)` → centroid ~800–1,200 Hz; v2 starts at ~5 kHz
-4. Kick pattern — steps `[0,4,8,11,14]`; v2 uses `[0,4,8,12]`
-5. lpenv sweep shape — centroid rises over 60 ms per trigger
+### v3 parameter status (in order of perceptual impact)
+
+| # | Parameter | SA target | v3 code | Perceptual verification |
+|---|---|---|---|---|
+| 1 | Sidechain pump depth | `duckdepth(.6)` → duck ratio ~0.40 | `SIDECHAIN_DEPTH = 0.6` ✓ | **Not yet measured from v3 output** |
+| 2 | Trancegate shape | Smooth cosine, peak/trough > 5× | `synth/envelopes.py trancegate()` | **Not yet verified against SA reference** |
+| 3 | Filter floor | `rlpf(0.5)` → centroid ~800–1,200 Hz | `rlpf_to_hz` formula confirmed ✓ | **Not yet measured from v3 pad output** |
+| 4 | Kick pattern | Steps `[0,4,8,11,14]` | `KICK_STEPS_SYNCOPATED` ✓ | **Confirmed in code** |
+| 5 | lpenv sweep shape | Centroid rises over 60 ms per trigger | `instruments/pad.py lpenv` | **Not yet measured** |
+
+Items 1–3 and 5 are the remaining gap between structurally correct and perceptually convincing. The constants are right; the output measurements are missing.
 
 ## No sample playback
 
 We do not use downloaded audio samples as playback assets in the generator. Reference samples (e.g. TR-909 kick WAV) are for measurement and parameter fitting only.
+
+## ASCII video overlay rule — colors only, never alter the display character
+
+**The CA's `█`/`░` character texture must never be replaced or overwritten by overlay code.**
+Overlays work exclusively by changing ANSI color/brightness — the displayed character always
+comes from the CA state.  Violating this breaks the visual identity of the CA diagram.
+
+This rule applies everywhere in `visualiser.py` (and any future renderer): `_av_colored_row`
+and any successor must only prepend a color escape before `ch` (the CA char) and append
+`_RESET` after it.  It must never substitute a different character for `ch`.
+
+**How to fix contrast problems without breaking this rule:** pre-process the source ASCII
+video file itself.  For logo-style art (e.g. Death Angel) where all content chars map to the
+same brightness tier, remap the source chars so that foreground glyphs → bright-tier
+characters (e.g. `#`) and background spaces → a distinct dark-tier character (e.g. `.` or
+space).  The renderer's color palette then produces natural contrast over the CA texture.
+
+---
+
+## Outstanding future work
+
+### bad_apple_cover.py trancegate regression (raised 2026-07-10)
+
+The binary trancegate introduced in commit `64b58a4` breaks `bad_apple_cover.py` — the
+smooth cosine gate is needed for continuous melody lines.  The current binary gate snaps
+hard between 0.3 and 1.0 at every 16th-note slot boundary, producing audible clicks ~10
+times per bar.  There is also a secondary BPM mismatch: `SupersawPad` at line 349 of
+`bad_apple_cover.py` is constructed without `bpm=`, defaulting to 140.0 instead of 138.
+
+**Reference audio:** `research/reference_audio/bad_apple_reference_175bbba.wav`
+Rendered from commit `175bbba` (last known-good state before the regression).  Use this
+WAV as the baseline when evaluating any proposed fix.
+
+**Regression report:** `docs/decisions/bad_apple_trancegate_regression.md`
+Full symptom description, both root causes, and the proposed fix are documented there.
+
+**Fix approach:**
+1. Add `gate_mode: str = 'binary'` parameter to `SupersawPad.__init__` and
+   `AcidLead.__init__`.  When `gate_mode='cosine'`, use the raised-cosine formula
+   (`floor=0.3, speed=1.5 cycles/bar`).  Default `'binary'` preserves SA trance behaviour
+   and all 213 tests must continue to pass.
+2. In `bad_apple_cover.py` line 349 (pad construction), pass `bpm=BPM, gate_mode='cosine'`.
+3. In `bad_apple_cover.py` lead construction (~line 353), pass `gate_mode='cosine'`.
+
+**How to verify:** render 32 bars, compare RMS envelope and spectrogram against the
+reference WAV using `python tools/compare_audio.py`.  The envelope must be smooth (no
+~107ms amplitude spikes); the full test suite must remain green.

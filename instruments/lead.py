@@ -58,7 +58,9 @@ class AcidLead:
                cutoff_slider: float = None,
                fm_depth: float = 0.0,
                gain: float = None,
-               samples_per_bar: int = None) -> tuple:
+               samples_per_bar: int = None,
+               portamento_s: float = 0.0,
+               target_midi: int = None) -> tuple:
         """Render n_samples of lead audio.
 
         Parameters
@@ -74,10 +76,15 @@ class AcidLead:
             rlpf slider override; if None uses the instance value.
         fm_depth : float
             Sine-FM modulation index. 0.0 at session start, ramps to 0.55 after
-            bar 96. Modulator at ~0.5× carrier frequency; creates sidebands in
-            the 2k–8k range when carrier is 200–400 Hz.
+            bar 96.
         gain : float, optional
             Output gain override; if None uses the instance value.
+        portamento_s : float
+            Glide time in seconds.  When > 0 and target_midi is given and
+            midi_notes has exactly one note, the pitch slides linearly (in
+            semitone space) from midi_notes[0] to target_midi over n_samples.
+        target_midi : int, optional
+            Target MIDI note for portamento glide.
 
         Returns
         -------
@@ -86,7 +93,7 @@ class AcidLead:
         from synth.oscillators import supersaw
         from synth.filters import lpf2, rlpf_to_hz
         from synth.envelopes import acidenv, trancegate
-        from song.theory import (TRANCEGATE_SPEED, TRANCEGATE_AMOUNT,
+        from song.theory import (TRANCEGATE_DENSITY, TRANCEGATE_FLOOR, TRANCEGATE_SEED,
                                   samples_per_bar as _samples_per_bar)
 
         slider = cutoff_slider if cutoff_slider is not None else self.cutoff_slider
@@ -102,12 +109,39 @@ class AcidLead:
         buf_r = np.zeros(n_samples, dtype=np.float32)
         n_notes = len(midi_notes)
 
+        use_portamento = (portamento_s > 0.0 and target_midi is not None
+                          and len(midi_notes) == 1)
+
         for note in midi_notes:
             note = max(0, min(127, int(note)))
-            l, r, self._osc_phases = supersaw(note, n_samples, self.sr,
-                                               saw_count=self._saw_count,
-                                               detune_cents=self._detune_cents,
-                                               osc_phases=self._osc_phases)
+            if use_portamento:
+                # Render 64 pitch segments gliding note → target_midi in semitone space.
+                end_midi = float(max(0, min(127, int(target_midi))))
+                midi_vals = np.linspace(float(note), end_midi, 64)
+                n_segs_port = 64
+                seg_len_port = max(1, n_samples // n_segs_port)
+                l = np.zeros(n_samples, dtype=np.float32)
+                r = np.zeros(n_samples, dtype=np.float32)
+                phases = self._osc_phases
+                for seg in range(n_segs_port):
+                    s = seg * seg_len_port
+                    e = (s + seg_len_port) if seg < n_segs_port - 1 else n_samples
+                    e = min(e, n_samples)
+                    if s >= n_samples:
+                        break
+                    sl, sr_, phases = supersaw(
+                        int(round(midi_vals[seg])), e - s, self.sr,
+                        saw_count=self._saw_count,
+                        detune_cents=self._detune_cents,
+                        osc_phases=phases)
+                    l[s:e] = sl
+                    r[s:e] = sr_
+                self._osc_phases = phases
+            else:
+                l, r, self._osc_phases = supersaw(note, n_samples, self.sr,
+                                                   saw_count=self._saw_count,
+                                                   detune_cents=self._detune_cents,
+                                                   osc_phases=self._osc_phases)
             if fm_depth > 0.0:
                 # SA's .fm(.5).fmwave("brown"): brown-noise phase modulation.
                 # Brown noise as modulator creates warm, inharmonic sidebands with
@@ -150,10 +184,10 @@ class AcidLead:
             buf_l[s:e], zi_l = lpf2(buf_l[s:e], seg_cut, q=2.0, sr=self.sr, zi=zi_l)
             buf_r[s:e], zi_r = lpf2(buf_r[s:e], seg_cut, q=2.0, sr=self.sr, zi=zi_r)
 
-        # Trancegate: smooth cosine amplitude gate at 1.5× bar rate.
         gate  = trancegate(n_samples, self.sr, spb,
                            bar_offset_samples=bar_offset_samples,
-                           speed=TRANCEGATE_SPEED, amount=TRANCEGATE_AMOUNT)
+                           density=TRANCEGATE_DENSITY, floor=TRANCEGATE_FLOOR,
+                           seed=TRANCEGATE_SEED)
         buf_l *= gate
         buf_r *= gate
 

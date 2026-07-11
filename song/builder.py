@@ -69,6 +69,114 @@ _BPM_RANGE = {
 }
 
 
+def build_hey_angel_song(total_bars: int = 128) -> 'Song':
+    """Build the "Hey Angel…" arrangement with exactly the analysed parameters.
+
+    Fixed parameters from research/analysis/hey_angel_analysis.md:
+    - BPM 138, root G1 (MIDI 43), G minor/dorian
+    - Bass: G1 quarter-note drone + F2 eighth + portamento sweep back
+    - Melody: C4→F#3 chromatic descend with slow portamento (15 sem/sec)
+    - High pluck: E5 sustained, filter burst on attack
+    - Sidechain: depth=0.721 (-11.1 dB trough)
+    - Kick: half-time pattern (steps 0, 8 only)
+    """
+    from song.song import Song
+    from song.track import Track
+    from instruments.drums import DrumKit
+    from instruments.bass import AcidBass
+    from instruments.lead import AcidLead
+    from instruments.pluck import HighPluck
+    from song.theory import (
+        SCALES, GAIN_KICK, GAIN_PAD, GAIN_LEAD, GAIN_BASS, GAIN_HIHAT,
+        SIDECHAIN_DEPTH_HEY_ANGEL,
+    )
+
+    # G1 = MIDI 43 (G below middle C, two octaves below G3=55)
+    # G natural minor scale
+    root_midi = 43
+    scale = SCALES['natural_minor']
+
+    stage_bars = {
+        'kick_on':         0,
+        'pad_root_on':     9999,   # no pad in Hey Angel
+        'bass_on':         0,
+        'lead_root_on':    0,
+        'lead_melody_on':  0,
+        'pad_chord_on':    9999,
+        'lead_voicing_on': 9999,
+        'clap_on':         9999,
+        'fm_on':           9999,
+        'pulse_on':        9999,
+        'hihat_on':        9999,
+        'kick_syncopated': 9999,
+    }
+
+    tracks = []
+
+    kit = DrumKit(seed=42, sr=SR,
+                  kick_decay_s=0.25,
+                  kick_pitch_floor=50.0)
+    tracks.append(Track(
+        instrument=kit,
+        instrument_type='kick',
+        active_from_bar=0,
+        gain_target=GAIN_KICK,
+    ))
+
+    bass = AcidBass(sr=SR)
+    tracks.append(Track(
+        instrument=bass,
+        instrument_type='bass',
+        active_from_bar=0,
+        gain_target=GAIN_BASS,
+    ))
+
+    # Melody lead: smooth character, slower acidenv, portamento handled in renderer
+    lead = AcidLead(root_midi=root_midi, sr=SR, character='smooth')
+    tracks.append(Track(
+        instrument=lead,
+        instrument_type='lead',
+        active_from_bar=0,
+        gain_target=GAIN_LEAD,
+    ))
+
+    # High pluck: enters at bar 2 (approximating t=3.1s at 138 BPM)
+    pluck = HighPluck(sr=SR)
+    tracks.append(Track(
+        instrument=pluck,
+        instrument_type='pluck',
+        active_from_bar=2,
+        gain_target=0.45,
+    ))
+
+    return Song(
+        bpm=138.0,
+        root_midi=root_midi,
+        scale=scale,
+        chord_prog=[[0, 4]],       # static G minor tonic (no progression in Hey Angel)
+        chord_weights=[1],
+        notearp_pattern=[-1] * 16,  # melody handled directly in hey_angel renderer path
+        tracks=tracks,
+        stage_bars=stage_bars,
+        filter_pb_bar=9999,
+        seed='hey_angel',
+        mood='uplifting',
+        total_bars=total_bars,
+        sr=SR,
+        pad_detune_cents=60.0,
+        pad_room_size=0.7,
+        pad_saw_count=5,
+        lead_character='smooth',
+        kick_decay_s=0.25,
+        kick_pitch_floor=50.0,
+        hihat_pattern='full',
+        arc_shape='steady',
+        chord_prog_b=None,
+        root_shift=0,
+        style='hey_angel',
+    )
+
+
 def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
                total_bars: int = 128) -> 'Song':
     """Build a Song from a seed and mood.
@@ -183,6 +291,7 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
 
     tracks = _build_tracks(stage_bars, root_midi, scale, chord_prog,
                            filter_pb_bar, drum_seed=drum_seed, sr=SR,
+                           bpm=float(bpm),
                            pad_detune_cents=pad_detune_cents,
                            pad_room_size=pad_room_size,
                            pad_saw_count=pad_saw_count,
@@ -220,6 +329,7 @@ def build_song(seed: str, mood: str = 'uplifting', bpm: float = None,
 def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
                   chord_prog: list, filter_pb_bar: int,
                   drum_seed: int = 42, sr: int = SR,
+                  bpm: float = 140.0,
                   pad_detune_cents: float = 60.0,
                   pad_room_size: float = 0.7,
                   pad_saw_count: int = 5,
@@ -251,7 +361,8 @@ def _build_tracks(stage_bars: dict, root_midi: int, scale: list,
         pad = SupersawPad(root_midi=root_midi, sr=sr,
                           detune_cents=pad_detune_cents,
                           room_size=pad_room_size,
-                          saw_count=pad_saw_count)
+                          saw_count=pad_saw_count,
+                          bpm=bpm)
         tracks.append(Track(
             instrument=pad,
             instrument_type='pad',
