@@ -1102,3 +1102,61 @@ be applied before another perceptual evaluation makes sense.
 After each structural fix, do a quick triage listen. Ask one question: has the level number
 gone up? If yes, note it and keep going. Only open the full framework when you reach Level 2
 or above — that is when the vocabulary and six-dimension scoring start to pay off.
+
+---
+
+## B.9 Approach 6 — Plain Language Explanation
+
+### What Approach 6 is
+
+Right now, the optimiser has a single measuring stick: CLAP score. CLAP is a
+*semantic* similarity metric — it asks "do these two clips feel like the same kind of
+music?" rather than "do they have the same spectral shape?" Think of it as asking
+whether a human expert would put them in the same genre category, not whether their
+waveforms are similar.
+
+Approach 6 asks: what if we gave the optimiser additional measuring sticks alongside
+CLAP?
+
+Three candidates:
+
+1. **Multi-scale spectral loss** — compare the magnitude spectrum at several FFT window
+   sizes simultaneously (e.g. 512, 1024, 2048, 4096 samples). Large windows are good
+   at pitch and timbre. Small windows are good at transient timing and attack shape.
+   Using all of them catches fine spectral mismatches that CLAP glosses over.
+
+2. **Mel-window cosine** — instead of one global embedding for the whole 27-second
+   clip, slice it into 1-bar windows (~1.7s at 140 BPM) and measure similarity in
+   each window, then average. CLAP sees the whole clip at once and can miss temporal
+   structure — a pad with the wrong gate rhythm might still score well if the overall
+   timbre matches. Per-bar measurement is more sensitive to rhythm and dynamics.
+
+3. **Composite objective** — combine all three with weights:
+   `score = α·CLAP + β·mel_window_cosine + γ·mfcc_cosine`. Each term is sensitive
+   to a different aspect of the sound.
+
+### The key risk
+
+CLAP's high-level abstraction is actually useful here, not a limitation. It
+generalises beyond the specific reference recording — it measures "does this sound
+like SA's style" rather than "does this match this exact WAV file." If you add
+signal-level objectives like mel cosine, the optimiser starts chasing the specific
+recording, not the style. The risk is overfitting: you could end up with parameters
+that score well on the combined metric but sound *worse* to a human, because they are
+matched to one specific 27-second clip rather than to SA's general synthesis approach.
+
+### Verdict: defer — wrong tool for the current gap level
+
+Approach 6 only makes sense once:
+
+1. Structural bugs are fixed (Approaches 3 and 1 applied).
+2. Perceptual triage reaches Level 2 or above — "same genre, wrong feel" rather than
+   "different category entirely."
+3. CLAP has already plateaued after OPT-003 at ~0.65 and a human listener says
+   "it's close but missing something specific."
+
+At that point, a supplementary signal-level metric might help the optimiser see what
+CLAP cannot. At Level 0 — where we are now — Approach 6 would be measuring fine
+spectral differences between two things that are not even in the same perceptual
+category. Fix the structure first; consider this only if CLAP keeps plateauing after
+the structural work is done.
