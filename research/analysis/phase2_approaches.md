@@ -93,13 +93,13 @@ before committing to more architecture work** — see Approach 5.
 ### Approach 1: Expand the CMA-ES search space with oscillator architecture parameters
 
 **Hypothesis**: `saw_count` and `detune_cents` are constructor parameters of `SupersawPad`
-(`instruments/pad.py` lines 35–37) with defaults of 5 voices and 60 cents, but are never
+(`instruments/pad.py` lines 33 and 35) with defaults of 5 voices and 60 cents, but are never
 passed through `HeyAngelRenderer.from_params()` — functionally fixed during optimisation.
 The JP-8000 supersaw (Szabo, 2010) has a character partly determined by the mix ratio
 between a centre oscillator and the detuned satellite voices — our implementation uses
 uniform summing across all voices (normalised by `1/N` — dividing the accumulated buffer
 by `saw_count`, `synth/oscillators.py` lines 116–117), which differs from Strudel's
-`1/sqrt(N)` equal-power normalisation (§A.5). At N=5 this is a ~6.7 dB level gap: our
+`1/sqrt(N)` equal-power normalisation (§A.5). At N=5 this is a ~7.0 dB level gap: our
 supersaw is quieter than Strudel's by a factor of `sqrt(5)`. This likely explains why
 `pad_gain` hits the upper bound in both OPT-001 and OPT-002 (§1.2) — the optimiser is
 compensating for the under-level rather than tuning timbre. This mismatch should be
@@ -298,23 +298,33 @@ clarifies what kind of gap remains.
 
 ## 3. Recommended Phase 2 sequence
 
-### Step 1 — Listen before touching anything (immediate, 10 min)
-Render OPT-002 params and listen back-to-back with the reference. Score all six dimensions
-using the **Perceptual Evaluation Framework** (`research/analysis/perceptual_evaluation_framework.md`)
-and write down the primary gap. This is the baseline — it must be done before any code
-changes so there is a before/after reference for every fix that follows.
+### Step 1 — Listen before touching anything ✓ DONE (2026-07-12)
+~~Render OPT-002 params and listen back-to-back with the reference.~~ Done. Triage verdict:
+**Level 0** — the two samples are not in the same perceptual category (see Approach 5 and
+§B.8). Full six-dimension scoring was not completed at this stage; a binary triage verdict
+is sufficient at Level 0. Note: because no per-dimension baseline scores were recorded,
+Step 3's before/after comparison will be relative to the triage level only, not to
+per-dimension deltas.
 
 ### Step 2 — Fix double-reverb (Approach 3, 1–2 hours)
 Remove `SchroederReverb` from `HeyAngelRenderer`'s master bus. Tune `SupersawPad`'s internal
 `SimpleFDN` to match SA's `.room(.7)`. Re-measure with `compare_audio.py`. Then listen again
-and confirm the issue identified in Step 1 is gone. This is the highest-priority structural
-fix — everything else optimises on top of it.
+and confirm the triage level has risen.
+
+**Important — measure each sub-step separately to avoid confounding:**
+- **Step 2a**: Remove master-bus `SchroederReverb` only. Run `compare_audio.py`. Listen.
+  Record triage level. This isolates the routing fix.
+- **Step 2b**: Tune `SimpleFDN` `room_size` to match SA's `.room(.7)`. Run `compare_audio.py`
+  again. Listen. Record triage level. This isolates the FDN parameter tuning.
+
+Measuring separately makes it possible to know which sub-step drove any improvement —
+important for deciding how much FDN parameter search is worth before OPT-003.
 
 ### Step 3 — Listen again (10 min)
-After the reverb fix, re-score all six dimensions using the same framework. Compare scores
-against Step 1 — the delta is the evidence that the fix addressed the right problem. If a
-new primary gap has emerged, note it. See `research/analysis/perceptual_evaluation_framework.md`
-§4.3 for the before/after session procedure.
+After Step 2, re-run the triage scale (§B.8). Has the level gone up? If yes, note it and
+continue. Once triage reaches Level 2 or above, open the full six-dimension framework
+(`research/analysis/perceptual_evaluation_framework.md` §4) to get per-dimension scores
+that can be compared before/after for all subsequent steps.
 
 ### Step 4 — ~~Fix SmoothLead to 3-voice supersaw~~ (retracted)
 This step is removed entirely — see Approach 2 retraction. `SmoothLead` single-oscillator
@@ -328,13 +338,26 @@ After Steps 1–3, run OPT-003 with:
   now-removed `reverb_wet`/`reverb_room` (see Approach 4)
 - Warm-start from OPT-002 best (re-encoded for the new parameter space)
 
-### Step 5 — If CLAP ≥ 0.70: gate check + merge
-### Step 5 — If CLAP still plateaued at ~0.66: declare synthesis layer validated
+### Step 6 — OPT-003 stopping criteria (pre-specified)
+
+Before running OPT-003, the falsification criterion must be written into `experiment_log.md`:
+
+- **Success**: CLAP ≥ 0.70 after structural fixes → gate check, then merge.
+- **Plateau confirmed**: CLAP < 0.66 after 1000+ evaluations with all structural fixes
+  applied → the CLAP ceiling hypothesis is confirmed. Proceed to perceptual evaluation
+  at the new baseline. Do not run further CMA-ES passes before evaluating with the
+  composite objective (Approach 6).
+- **Partial improvement** (0.66–0.70): run Approach 6 composite objective (OPT-004),
+  then gate check.
 
 If three CMA-ES runs across increasingly rich parameter spaces all plateau at 0.62–0.66,
 the CLAP ceiling is likely a metric limitation for this reference/generator pair rather
-than a perceptual gap. At that point, the synthesis stack is validated and the project
-advances to the arrangement arc (build structure, arrangement stages, filter automation).
+than a perceptual gap. At that point, the synthesis stack is validated at the CLAP layer
+and the project advances: either to Approach 6 (composite objective, Layer 2 fidelity)
+or to the arrangement arc if perceptual evaluation confirms the style is already correct.
+
+### Step 7 — If CLAP ≥ 0.70: gate check + merge
+### Step 7 — If CLAP still plateaued after OPT-003: Approach 6 composite objective
 
 ---
 
@@ -616,7 +639,7 @@ envelope shape, not a direct frequency offset. Peak cutoff ≈ `base × 2^lpenv`
 `instruments/lead.py` `AcidLead`, character preset `'acid'`:
 ```python
 _CHARACTERS = {
-    'acid': (saw_count=3, detune_cents=30, decay_s=0.08, delay_wet=0.7, slider=0.593)
+    'acid': (3, 30.0, 0.08, 0.7, 0.593)  # saw_count, detune_cents, decay_s, delay_wet, slider
 }
 ```
 
@@ -906,7 +929,7 @@ Approach 1 bundles two separate problems. Worth separating them.
 ### B.2 Idea A: The normalisation gap (the more important one)
 
 Our supersaw adds up 5 voices then divides by 5. Strudel divides by √5 instead. Dividing
-by √5 gives a louder result than dividing by 5 — about 6.7 dB louder.
+by √5 gives a louder result than dividing by 5 — about 7.0 dB louder.
 
 So our pad is structurally quieter than SA's by that margin. The optimiser's response was to
 crank `pad_gain` all the way to its upper bound in both OPT-001 and OPT-002 — it was
