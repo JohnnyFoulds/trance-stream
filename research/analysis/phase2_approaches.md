@@ -9,6 +9,25 @@ theoretical basis, and the trade-offs, to inform planning for the next phase.
 
 ---
 
+> **IMPORTANT — Current sub-goal vs ultimate goal. Do not confuse these.**
+>
+> The **ultimate goal** of this project is Death Angel: a generative trance entity with its
+> own original style. The correct metric there is semantic/style similarity — "does this
+> sound like SA's style in general?" CLAP is well-suited for that goal because it generalises
+> across recordings.
+>
+> The **current sub-goal** (`hey_angel_cover.py`, this branch) is a *cover* — recreating
+> this specific reference clip as accurately as possible using our synthesis stack. The
+> correct question here is "does our output match this specific recording?" This means
+> **signal-level fidelity matters**, and optimising toward the specific reference WAV file
+> is the goal, not a risk. The cover is the vehicle for validating the synthesis stack;
+> once the stack can faithfully reproduce a known target, Death Angel has something to build on.
+>
+> Any metric discussion in this document must be read in the cover context. "Overfitting to
+> the reference" is desirable here. See §B.9 for how this specifically affects Approach 6.
+
+---
+
 ## 1. What the data tells us
 
 ### 1.1 The CMA-ES plateau is real
@@ -1135,28 +1154,37 @@ Three candidates:
    `score = α·CLAP + β·mel_window_cosine + γ·mfcc_cosine`. Each term is sensitive
    to a different aspect of the sound.
 
-### The key risk
+### The "overfitting" concern does NOT apply here
 
-CLAP's high-level abstraction is actually useful here, not a limitation. It
-generalises beyond the specific reference recording — it measures "does this sound
-like SA's style" rather than "does this match this exact WAV file." If you add
-signal-level objectives like mel cosine, the optimiser starts chasing the specific
-recording, not the style. The risk is overfitting: you could end up with parameters
-that score well on the combined metric but sound *worse* to a human, because they are
-matched to one specific 27-second clip rather than to SA's general synthesis approach.
+In the ultimate Death Angel context, adding signal-level objectives to the optimiser
+would be a mistake — it would chase a specific recording rather than SA's general
+style, which is the wrong goal for an original generative entity.
 
-### Verdict: defer — wrong tool for the current gap level
+But that is not the current sub-goal. `hey_angel_cover.py` is a *cover* — the
+explicit goal is to recreate this specific reference clip as accurately as possible.
+**"Overfitting" to the reference is the point.** Signal-level fidelity is exactly
+what we want here. CLAP alone is too abstract for this task: two clips can score
+0.90 CLAP while sounding noticeably different because CLAP does not see transient
+timing, gate rhythm, or fine spectral shape.
 
-Approach 6 only makes sense once:
+This means Approach 6 is not just useful — it is arguably more appropriate than
+CLAP-only for the cover task. CLAP keeps the optimiser in the right genre; signal-level
+terms pull it toward the specific recording. Both are needed.
 
-1. Structural bugs are fixed (Approaches 3 and 1 applied).
-2. Perceptual triage reaches Level 2 or above — "same genre, wrong feel" rather than
-   "different category entirely."
-3. CLAP has already plateaued after OPT-003 at ~0.65 and a human listener says
-   "it's close but missing something specific."
+### Verdict: defer — correct direction, wrong time
 
-At that point, a supplementary signal-level metric might help the optimiser see what
-CLAP cannot. At Level 0 — where we are now — Approach 6 would be measuring fine
-spectral differences between two things that are not even in the same perceptual
-category. Fix the structure first; consider this only if CLAP keeps plateauing after
-the structural work is done.
+Approach 6 is the right approach for OPT-004 or later, after the structural bugs are
+fixed and OPT-003 has been run. The reason to defer is not conceptual but practical:
+
+1. At triage Level 0, the gap is structural (double-reverb, normalisation). A more
+   sensitive objective function cannot fix an architecture bug — it will just optimise
+   noisily on top of broken synthesis.
+2. CLAP needs to be a reasonable signal before adding terms to a composite. If
+   CLAP cannot see a meaningful difference, the composite weights are untuned and
+   the composite objective is arbitrary.
+3. Once structural fixes land and OPT-003 reaches Level 1 or 2 on triage, Approach 6
+   becomes the next natural step — the composite objective gives the optimiser the
+   resolution to close the remaining gap that CLAP cannot see.
+
+**Do not confuse this with the Death Angel phase**, where signal-level objectives
+are actively wrong. See the sub-goal note at the top of this document.
