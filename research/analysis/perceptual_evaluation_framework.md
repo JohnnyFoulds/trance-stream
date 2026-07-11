@@ -201,13 +201,13 @@ exactly one thing between the ON and OFF version.
 
 | Files | Term | What to listen for | The tell |
 |---|---|---|---|
-| `A01_transient_with.mp3` vs `A02_transient_without.mp3` | **transient** | A01 has a sharp click at the start of every kick hit. A02 has the same body and tail but the click is replaced by a 10 ms fade-in. | If you can hear the precise moment the kick starts, the transient is there. If it seems to "swell in", it's gone. |
-| `A03_dry_kick.mp3` vs `A04_wet_kick.mp3` | **dry / wet** | A03 is close and immediate — each kick stops cleanly. A04 has a long reverb tail that bleeds into the gap before the next beat. | On A04, close your eyes and count the beats — the reverb tail makes the gaps feel shorter and the mix feels distant. |
-| `A05_gate_on.mp3` vs `A06_gate_off.mp3` | **gate** | A05 has rhythmic silence chopped into the pad at 16th-note resolution. A06 is a continuous drone. | On A05, the pad has gaps — moments where you hear nothing (or near-nothing). On A06, it is always on. |
-| `A07_sweep_on.mp3` vs `A08_sweep_off.mp3` | **sweep** | A07 has a filter that opens up (brightens) at the start of each bar then closes again. A08 has a fixed, static timbre throughout. | On A07, the brightness of the pad changes over time — it gets brighter then darker cyclically. On A08, brightness is constant. |
-| `A09_pump_on.mp3` vs `A10_pump_off.mp3` | **pump** | A09: the pad volume briefly dips on every kick hit then recovers. A10: pad and kick are at fixed, independent volumes. | On A09, the pad seems to breathe in time with the kick — louder in the gaps, quieter on the beat. On A10, the pad is steady regardless of the kick. |
-| `A11_spread_stereo.mp3` vs `A12_spread_mono.mp3` | **spread** | A11: on headphones, the pad is wide — left and right ears hear different content. A12: identical centre image in both ears. | Put one headphone to your ear and pull the other away. On A11, the sound changes significantly. On A12, it does not. |
-| `A13_sub_with.mp3` vs `A14_sub_without.mp3` | **sub** | A13 has weight below 80 Hz — felt in the chest on speakers, or as a low pressure on headphones. A14 has had the sub removed by a high-pass filter. | On A14, the bass feels thin and nasal compared to A13. If you turn the volume up and still feel no low-end pressure, the sub is gone. |
+| [A01_transient_with.mp3](../reference_audio/training/A01_transient_with.mp3) vs [A02_transient_without.mp3](../reference_audio/training/A02_transient_without.mp3) | **transient** | A01 has a sharp click at the start of every kick hit. A02 has the same body and tail but the click is replaced by a 10 ms fade-in. | If you can hear the precise moment the kick starts, the transient is there. If it seems to "swell in", it's gone. |
+| [A03_dry_kick.mp3](../reference_audio/training/A03_dry_kick.mp3) vs [A04_wet_kick.mp3](../reference_audio/training/A04_wet_kick.mp3) | **dry / wet** | A03 is close and immediate — each kick stops cleanly. A04 has a long reverb tail that bleeds into the gap before the next beat. | On A04, close your eyes and count the beats — the reverb tail makes the gaps feel shorter and the mix feels distant. |
+| [A05_gate_on.mp3](../reference_audio/training/A05_gate_on.mp3) vs [A06_gate_off.mp3](../reference_audio/training/A06_gate_off.mp3) | **gate** | A05 has rhythmic silence chopped into the pad at 16th-note resolution. A06 is a continuous drone. | On A05, the pad has gaps — moments where you hear nothing (or near-nothing). On A06, it is always on. |
+| [A07_sweep_on.mp3](../reference_audio/training/A07_sweep_on.mp3) vs [A08_sweep_off.mp3](../reference_audio/training/A08_sweep_off.mp3) | **sweep** | A07 has a filter that opens up (brightens) at the start of each bar then closes again. A08 has a fixed, static timbre throughout. | On A07, the brightness of the pad changes over time — it gets brighter then darker cyclically. On A08, brightness is constant. |
+| [A09_pump_on.mp3](../reference_audio/training/A09_pump_on.mp3) vs [A10_pump_off.mp3](../reference_audio/training/A10_pump_off.mp3) | **pump** | A09: the pad volume briefly dips on every kick hit then recovers. A10: pad and kick are at fixed, independent volumes. | On A09, the pad seems to breathe in time with the kick — louder in the gaps, quieter on the beat. On A10, the pad is steady regardless of the kick. |
+| [A11_spread_stereo.mp3](../reference_audio/training/A11_spread_stereo.mp3) vs [A12_spread_mono.mp3](../reference_audio/training/A12_spread_mono.mp3) | **spread** | A11: on headphones, the pad is wide — left and right ears hear different content. A12: identical centre image in both ears. | Put one headphone to your ear and pull the other away. On A11, the sound changes significantly. On A12, it does not. |
+| [A13_sub_with.mp3](../reference_audio/training/A13_sub_with.mp3) vs [A14_sub_without.mp3](../reference_audio/training/A14_sub_without.mp3) | **sub** | A13 has weight below 80 Hz — felt in the chest on speakers, or as a low pressure on headphones. A14 has had the sub removed by a high-pass filter. | On A14, the bass feels thin and nasal compared to A13. If you turn the volume up and still feel no low-end pressure, the sub is gone. |
 
 ### 8.3 Group B — Comparative pairs (Strudel ground truth vs Python synthesis)
 
@@ -216,10 +216,10 @@ current synthesis produces. The gap between them is what we are working to close
 
 | Strudel (ground truth) | Python (current) | Dimension | What to listen for |
 |---|---|---|---|
-| `B01_pad_strudel.mp3` | `B02_pad_python.mp3` | Pad character | Gate rhythm, sweep depth, body/tail, spread |
-| `B03_kick_tr909.mp3` | `B04_kick_python.mp3` | Rhythm & Drive | Transient click, body, pitch sweep |
-| `B05_sidechain_strudel.mp3` | `B06_sidechain_python.mp3` | Pump | Depth of duck, recovery time, kick/pad relationship |
-| `B07_fullmix_sa.mp3` | `B08_fullmix_ours.mp3` | All dimensions | Full 27s comparison — use the evaluation form from Section 4 |
+| [B01_pad_strudel.mp3](../reference_audio/training/B01_pad_strudel.mp3) | [B02_pad_python.mp3](../reference_audio/training/B02_pad_python.mp3) | Pad character | Gate rhythm, sweep depth, body/tail, spread |
+| [B03_kick_tr909.mp3](../reference_audio/training/B03_kick_tr909.mp3) | [B04_kick_python.mp3](../reference_audio/training/B04_kick_python.mp3) | Rhythm & Drive | Transient click, body, pitch sweep |
+| [B05_sidechain_strudel.mp3](../reference_audio/training/B05_sidechain_strudel.mp3) | [B06_sidechain_python.mp3](../reference_audio/training/B06_sidechain_python.mp3) | Pump | Depth of duck, recovery time, kick/pad relationship |
+| [B07_fullmix_sa.mp3](../reference_audio/training/B07_fullmix_sa.mp3) | [B08_fullmix_ours.mp3](../reference_audio/training/B08_fullmix_ours.mp3) | All dimensions | Full 27s comparison — use the evaluation form from Section 4 |
 
 ### 8.4 Strudel reference snippets (browser, real-time)
 
