@@ -223,19 +223,21 @@ to a perceptual gap of equivalent magnitude. It's possible that the OPT-002 outp
 sounds convincingly like SA's style to a human listener, and further CLAP optimisation yields
 diminishing perceptual returns.
 
-**What to do**:
-- Render 16 bars (27.4s) of OPT-002 best params
+**Result (2026-07-12)**: Hypothesis **REJECTED**. Listening test confirmed the gap is large
+and immediately obvious — the two samples are not perceptually in the same category. No
+fine-grained evaluation framework is needed at this stage; the gap is structural, not subtle.
+See §B.8 for the triage assessment and what it implies.
+
+**What to do** (for future re-evaluation after structural fixes):
+- Render 16 bars (27.4s) of current best params
 - Listen back-to-back with `hey_angel_trimmed.wav`
-- Write down the single most obvious perceptual difference
+- Apply the triage scale (§B.8) first; only escalate to the full framework
+  (`research/analysis/perceptual_evaluation_framework.md`) when the gap is close enough
+  that tree vs cat is no longer the right analogy
 
-This is a 10-minute task with high diagnostic value. If the gap is perceptually large and
-obvious (wrong reverb character, wrong lead timbre, wrong rhythmic feel), that tells you
-*where* to focus architecture work. If the gap is small or subtle, the CLAP ceiling may be
-a metric limitation rather than a synthesis gap — and you're closer to the acceptance bar
-(BR-1: "identifiable as SA's style within 15 seconds") than the numbers suggest.
-
-**Verdict**: Do this first, before any code changes. It costs nothing and may redirect the
-entire Phase 2 roadmap.
+**Verdict**: Approach 3 (double-reverb fix) is now the confirmed first action. The perceptual
+evaluation framework is reserved for when structural fixes have been applied and the gap
+is in the fine-detail range.
 
 ---
 
@@ -1064,30 +1066,39 @@ just change once the signal chain is correct.
 
 ### What Approach 5 is
 
-Before writing any more code, just listen. Render the OPT-002 output, put it next to the SA
-reference, and write down the single most obvious thing that sounds different. That is it.
-Ten minutes, no code.
+Before writing more code, just listen. Render the OPT-002 output, put it next to the SA
+reference, and write down the single most obvious thing that sounds different.
 
-### Why this matters
+### Result (2026-07-12): hypothesis rejected — gap is structural
 
-All the work so far has been driven by numbers — CLAP score, centroid ratio, band energy.
-Those numbers are useful but they are proxies. What we actually care about is whether it
-sounds like SA. The two do not always point in the same direction.
+The two samples were listened to back-to-back. The verdict was immediate: they are not even
+in the same perceptual category. This is not a "close but slightly off" situation. It is more
+like comparing a tree and a cat — no fine-grained rubric is needed to know they are not the
+same thing.
 
-There are two possible outcomes from listening:
+This rules out the hypothesis. The 0.078 CLAP gap is not a metric artefact. The gap is real,
+large, and audible.
 
-1. **The gap is large and obvious** — wrong reverb character, kick sounds soft, pad is a
-   wash instead of a rhythmic gate. That tells you exactly where to focus. The numbers were
-   right to be concerned.
+### Triage scale — use this before the full framework
 
-2. **The gap is small or subtle** — it already sounds pretty close. In that case the CLAP
-   ceiling of 0.622 is a measurement limitation, not a real perceptual gap. Chasing the last
-   0.078 CLAP points would be optimising a metric rather than improving the sound.
+The full perceptual evaluation framework (`research/analysis/perceptual_evaluation_framework.md`)
+is designed for fine-grained diagnosis when the samples are close. It is overkill when the
+gap is structural. Use this simpler triage scale first:
 
-### The connection to what we already know
+| Level | Description | Action |
+|---|---|---|
+| **0 — Different category** | A non-expert would not identify the two as related | Fix structural bugs first. Do not run more evaluations until at Level 1. |
+| **1 — Same genre, wrong feel** | Clearly trance, clearly not SA | Identify the two or three most obvious differences. Fix those. |
+| **2 — SA-adjacent** | Someone familiar with SA might recognise the intent | Use the full six-dimension framework to diagnose remaining gaps. |
+| **3 — Close** | A careful listener notices specific differences | Use the full framework. Consider whether CLAP ceiling is the limiting factor. |
+| **4 — Indistinguishable** | BR-1 acceptance criterion met | Done. |
 
-Given what we now know about the double-reverb bug, the answer is probably outcome 1 — the
-reverb character alone should be clearly audible as wrong. But it is still worth doing the
-listen first, because it anchors everything: write down what you hear, fix Approach 3, then
-listen again. If the single most obvious difference disappears after the reverb fix, you know
-you solved the right problem.
+**Current state: Level 0.** OPT-002 output is not in the same perceptual category as SA's
+reference. The structural fixes (Approach 3: double-reverb, Approach 1: normalisation) must
+be applied before another perceptual evaluation makes sense.
+
+### When to re-run Approach 5
+
+After each structural fix, do a quick triage listen. Ask one question: has the level number
+gone up? If yes, note it and keep going. Only open the full framework when you reach Level 2
+or above — that is when the vocabulary and six-dimension scoring start to pay off.
