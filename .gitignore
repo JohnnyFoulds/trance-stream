@@ -25,6 +25,9 @@ research/strudel_spectrum.js
 # Stems are excluded (large, re-derivable with tools/reverse_engineer.py)
 research/reference_audio/stems/*/
 
+# Ear training: WAV intermediates are excluded (MP3s at 192k are committed instead)
+research/reference_audio/training/*.wav
+
 # Video files
 *.webm
 
