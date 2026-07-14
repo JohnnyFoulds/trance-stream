@@ -77,6 +77,130 @@
 <div class="note">Edit rlpf (0–1), lpenv, detune, add(-14) etc. Hit Play after each change.</div>
 </div>
 
+<h2>4 — Ear Training: SA Acid Lead</h2>
+<div class="section">
+<textarea id="c4" rows="4">note("c3 c3 f3 g3").slow(2)
+  .s('supersaw').unison(1).detune(.5)
+  .lpf(100).lpsustain(0.2).lpd(.2).lpenv(2).lpq(12)</textarea>
+<button onclick="playSnippet('c4')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">SA's acid register — single-voice supersaw, Q=12 resonance, 100 Hz base cutoff sweeping to 400 Hz. Demonstrates: character, sweep, brightness.</div>
+</div>
+
+<h2>5 — Ear Training: Noisehat (SA's noisehat register)</h2>
+<div class="section">
+<textarea id="c5" rows="2">s('white').seg(16).dec(tri.fast(4).range(.05,.12))</textarea>
+<button onclick="playSnippet('c5')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Raw white noise, 16th-note retrig, triangle LFO modulating decay 50–120 ms at 4 cycles/bar. Demonstrates: transient, brightness (no HPF — full spectrum).</div>
+</div>
+
+<h2>6 — Ear Training: Gate ON (pad with trancegate)</h2>
+<div class="section">
+<textarea id="c6" rows="7">n("0").add(-14).scale("g:minor")
+  .s("supersaw").unison(5).detune(.6)
+  .trancegate(1.5, 45, 1)
+  .rlpf(0.5)
+  .lpenv(2)
+  .room(.7)
+  .o(2)</textarea>
+<button onclick="playSnippet('c6')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Pad with gate active — rhythmic 16th-note on/off pattern. Compare with c7 (gate off). Demonstrates: gate.</div>
+</div>
+
+<h2>7 — Ear Training: Gate OFF (pad without trancegate)</h2>
+<div class="section">
+<textarea id="c7" rows="6">n("0").add(-14).scale("g:minor")
+  .s("supersaw").unison(5).detune(.6)
+  .rlpf(0.5)
+  .lpenv(2)
+  .room(.7)
+  .o(2)</textarea>
+<button onclick="playSnippet('c7')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Continuous pad — no gate. Compare with c6 (gate on). The pad drones without rhythmic chop.</div>
+</div>
+
+<h2>8 — Ear Training: Sweep ON (pad with lpenv)</h2>
+<div class="section">
+<textarea id="c8" rows="7">n("0").add(-14).scale("g:minor")
+  .s("supersaw").unison(5).detune(.6)
+  .trancegate(1.5, 45, 1)
+  .rlpf(0.5)
+  .lpenv(2)
+  .room(.7)
+  .o(2)</textarea>
+<button onclick="playSnippet('c8')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Filter sweeps open each bar (lpenv=2 octaves, 1296 Hz → 5184 Hz peak). Compare with c9 (no sweep). Demonstrates: sweep.</div>
+</div>
+
+<h2>9 — Ear Training: Sweep OFF (static filter)</h2>
+<div class="section">
+<textarea id="c9" rows="6">n("0").add(-14).scale("g:minor")
+  .s("supersaw").unison(5).detune(.6)
+  .trancegate(1.5, 45, 1)
+  .rlpf(0.7)
+  .room(.7)
+  .o(2)</textarea>
+<button onclick="playSnippet('c9')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Static filter at rlpf(0.7) = 7056 Hz — no lpenv. Pad timbre is fixed, not evolving. Compare with c8 (sweep on).</div>
+</div>
+
+<h2>10 — Ear Training: Kick Dry (TR-909, no reverb)</h2>
+<div class="section">
+<textarea id="c10" rows="2">s("bd:2!4").bank("RolandTR909").dec(.3)</textarea>
+<button onclick="playSnippet('c10')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">TR-909 kick, 4-on-the-floor, no reverb. Demonstrates: dry, transient. Compare with c11 (wet kick).</div>
+</div>
+
+<h2>11 — Ear Training: Kick Wet (TR-909 with heavy reverb)</h2>
+<div class="section">
+<textarea id="c11" rows="3">s("bd:2!4").bank("RolandTR909").dec(.3)
+  .room(.9).roomsize(8)</textarea>
+<button onclick="playSnippet('c11')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Same TR-909 kick with heavy reverb. Transient is present but tail fills the gaps between beats. Compare with c10 (dry). Demonstrates: wet, tail.</div>
+</div>
+
+<h2>12 — Ear Training: Sidechain Pump ON</h2>
+<div class="section">
+<textarea id="c12" rows="11">stack(
+  s("bd:2!4").bank("RolandTR909").dec(.3).o(3),
+  n("0").add(-14).scale("g:minor")
+    .s("supersaw").unison(5).detune(.6)
+    .trancegate(1.5, 45, 1)
+    .rlpf(0.5)
+    .lpenv(2)
+    .room(.7)
+    .duck("3").duckattack(0.16).duckdepth(0.6)
+    .o(2)
+)</textarea>
+<button onclick="playSnippet('c12')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Pad ducks on every kick hit — volume briefly drops then recovers over 160 ms. Compare with c13 (no pump). Demonstrates: pump.</div>
+</div>
+
+<h2>13 — Ear Training: Sidechain Pump OFF</h2>
+<div class="section">
+<textarea id="c13" rows="10">stack(
+  s("bd:2!4").bank("RolandTR909").dec(.3),
+  n("0").add(-14).scale("g:minor")
+    .s("supersaw").unison(5).detune(.6)
+    .trancegate(1.5, 45, 1)
+    .rlpf(0.5)
+    .lpenv(2)
+    .room(.7)
+    .o(2)
+)</textarea>
+<button onclick="playSnippet('c13')">&#9654; Play</button>
+<button class="stop" onclick="stopAll()">&#9632; Stop</button>
+<div class="note">Kick and pad at fixed volumes — no ducking relationship. Compare with c12 (pump on). The pad level does not respond to the kick.</div>
+</div>
+
 <script>
 const statusEl = document.getElementById('status');
 const errorEl  = document.getElementById('error');

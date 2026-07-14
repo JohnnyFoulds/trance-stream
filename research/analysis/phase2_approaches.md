@@ -9,6 +9,34 @@ theoretical basis, and the trade-offs, to inform planning for the next phase.
 
 ---
 
+> **IMPORTANT — Three layers of goals. Do not collapse these into one.**
+>
+> This project has three distinct layers, each requiring a different kind of metric:
+>
+> **Layer 1 — SA's general synthesis style.**
+> The timbral character, instrument architecture, and the way her sounds feel across all her
+> tracks. This must be correct regardless of which song is being covered. CLAP is the right
+> metric here because it measures style generalisation, not waveform shape. Getting this
+> wrong means the cover will never sound like SA made it — no amount of signal-level matching
+> fixes a wrong synthesis architecture.
+>
+> **Layer 2 — This specific cover (`hey_angel_cover.py`).**
+> Once the style is correct, fine-tune toward this specific reference clip. Signal-level
+> metrics (mel-window cosine, multi-scale STFT) are appropriate here because the goal is
+> fidelity to this recording. But Layer 1 must come first — signal-level matching on top of
+> wrong synthesis architecture just fits the wrong sound more precisely.
+>
+> **Layer 3 — Death Angel.**
+> Replace SA's style with an original one. Style generalisation is everything here; signal-
+> level fidelity to any specific recording is irrelevant.
+>
+> **The cover is not just about matching a waveform.** It requires solving Layer 1 (get the
+> synthesis style right) before Layer 2 (fit this specific clip) can work. The two layers
+> are sequential, not interchangeable. Any metric discussion in this document must identify
+> which layer it is addressing. See §B.9 for how this specifically affects Approach 6.
+
+---
+
 ## 1. What the data tells us
 
 ### 1.1 The CMA-ES plateau is real
@@ -27,7 +55,10 @@ different. The objective surface flattens before the perceptual gap closes.
 
 The OPT-002 best params are diagnostic:
 - `lead_cutoff_hz = 11444` (near 12000 upper bound — wants to go brighter)
-- `pad_gain = 4.98` (near 5.0 upper bound — wants more sub-bass)
+- `pad_gain = 4.98` (near 5.0 upper bound — wants more sub-bass; may partly reflect the
+  `1/N` vs `1/sqrt(N)` normalisation gap in `SupersawPad` — see Approach 1)
+- `pad_cutoff_slider = 0.861` (normalised position 0.929 within bounds [0.35, 0.90] — near
+  upper bound; CMA-ES wanted to open the pad filter further)
 - `kick_decay_s = 0.499` (AT 0.50 upper bound — wants longer decay)
 - `reverb_room = 0.63`, `reverb_wet = 0.37` (substantially larger and wetter than baseline)
 - `hihat_decay_s = 0.005` (AT lower bound — wants very short hihat)
@@ -62,12 +93,18 @@ before committing to more architecture work** — see Approach 5.
 ### Approach 1: Expand the CMA-ES search space with oscillator architecture parameters
 
 **Hypothesis**: `saw_count` and `detune_cents` are constructor parameters of `SupersawPad`
-(`instruments/pad.py` lines 35–37) with defaults of 5 voices and 60 cents, but are never
+(`instruments/pad.py` lines 33 and 35) with defaults of 5 voices and 60 cents, but are never
 passed through `HeyAngelRenderer.from_params()` — functionally fixed during optimisation.
 The JP-8000 supersaw (Szabo, 2010) has a character partly determined by the mix ratio
 between a centre oscillator and the detuned satellite voices — our implementation uses
-uniform summing across all voices (normalised by `1/sqrt(N)`), which may not match the
-Roland hardware's weighting. Note: the JP-8000 uses 7 voices (1 centre + 6 detuned); SA's
+uniform summing across all voices (normalised by `1/N` — dividing the accumulated buffer
+by `saw_count`, `synth/oscillators.py` lines 116–117), which differs from Strudel's
+`1/sqrt(N)` equal-power normalisation (§A.5). At N=5 this is a ~7.0 dB level gap: our
+supersaw is quieter than Strudel's by a factor of `sqrt(5)`. This likely explains why
+`pad_gain` hits the upper bound in both OPT-001 and OPT-002 (§1.2) — the optimiser is
+compensating for the under-level rather than tuning timbre. This mismatch should be
+investigated before OPT-003. Whether the normalisation approach matches the
+Roland hardware's weighting is a separate question. Note: the JP-8000 uses 7 voices (1 centre + 6 detuned); SA's
 `unison(5)` uses 5 — `centre_mix_ratio` is therefore a hypothesis to explore, not a
 confirmed SA parameter. Adding `saw_count` and `detune_cents` to the CMA-ES space gives the
 optimiser new axes regardless of centre-weighting.
@@ -175,19 +212,35 @@ architectural bug.
 
 ### Approach 4: Widen remaining bound-hitting parameters for OPT-003
 
-Even without architecture changes, OPT-002 hit `kick_decay_s` AT 0.50 and showed
-`reverb_room` and `reverb_wet` well above their previous ranges. A third run with wider
-bounds and warm-started from OPT-002 would cost ~60 min and might yield +0.01–0.02 CLAP.
+The optimiser hitting a bound is a signal that the optimum lies beyond the current allowed
+range. Two parameters from OPT-002 need attention.
 
-**Specific changes**:
+**What survives regardless of Approach 3:**
 ```
-('kick_decay_s',     0.05, 0.80,  0.499)   # was 0.10–0.50
-('reverb_room',      0.20, 0.99,  0.631)   # was 0.20–0.90
-('reverb_wet',       0.05, 0.60,  0.371)   # was 0.05–0.45
+('kick_decay_s',     0.05, 0.80,  0.499)   # was 0.10–0.50; AT upper bound
 ```
+The kick decay is independent of reverb. Widen and include in OPT-003 unconditionally.
 
-**Verdict**: Low effort, marginal gain. Worth doing *alongside* Approach 1 (i.e., as part
-of OPT-003) but not as a standalone run. Don't burn 4000 evals for +0.015.
+**What changes depending on Approach 3:**
+
+`reverb_wet = 0.371` was near its 0.45 ceiling — but `reverb_wet` is a parameter of the
+master bus `SchroederReverb`, which Approach 3 identifies as a confirmed bug to be removed
+entirely. If Approach 3 is fixed first (which it should be), `reverb_wet` and `reverb_room`
+cease to exist as parameters. Do not widen their bounds — widen something that will still
+exist.
+
+Instead, after fixing Approach 3, add the pad's internal `SimpleFDN` parameters to the
+OPT-003 search space (room size, wet level, decay time). These are the reverb parameters
+that will actually matter once the signal chain is correct. This is the transformed version
+of the reverb widening — the spirit is the same (give the optimiser room to tune reverb
+character), but the parameters change.
+
+Note: `reverb_room = 0.631` has bounds (0.20, 0.90); normalised position = 0.615 — well
+interior. It is not bound-hitting and does not need widening regardless.
+
+**Verdict**: `kick_decay_s` widening is unconditional. Reverb widening is superseded by
+Approach 3 — do not add `reverb_wet`/`reverb_room` to OPT-003; add `SimpleFDN` parameters
+instead. See §B.7 for full explanation.
 
 ---
 
@@ -198,19 +251,21 @@ to a perceptual gap of equivalent magnitude. It's possible that the OPT-002 outp
 sounds convincingly like SA's style to a human listener, and further CLAP optimisation yields
 diminishing perceptual returns.
 
-**What to do**:
-- Render 30s of OPT-002 best params
+**Result (2026-07-12)**: Hypothesis **REJECTED**. Listening test confirmed the gap is large
+and immediately obvious — the two samples are not perceptually in the same category. No
+fine-grained evaluation framework is needed at this stage; the gap is structural, not subtle.
+See §B.8 for the triage assessment and what it implies.
+
+**What to do** (for future re-evaluation after structural fixes):
+- Render 16 bars (27.4s) of current best params
 - Listen back-to-back with `hey_angel_trimmed.wav`
-- Write down the single most obvious perceptual difference
+- Apply the triage scale (§B.8) first; only escalate to the full framework
+  (`research/analysis/perceptual_evaluation_framework.md`) when the gap is close enough
+  that tree vs cat is no longer the right analogy
 
-This is a 10-minute task with high diagnostic value. If the gap is perceptually large and
-obvious (wrong reverb character, wrong lead timbre, wrong rhythmic feel), that tells you
-*where* to focus architecture work. If the gap is small or subtle, the CLAP ceiling may be
-a metric limitation rather than a synthesis gap — and you're closer to the acceptance bar
-(BR-1: "identifiable as SA's style within 15 seconds") than the numbers suggest.
-
-**Verdict**: Do this first, before any code changes. It costs nothing and may redirect the
-entire Phase 2 roadmap.
+**Verdict**: Approach 3 (double-reverb fix) is now the confirmed first action. The perceptual
+evaluation framework is reserved for when structural fixes have been applied and the gap
+is in the fine-detail range.
 
 ---
 
@@ -243,33 +298,66 @@ clarifies what kind of gap remains.
 
 ## 3. Recommended Phase 2 sequence
 
-### Step 1 — Listen (immediate, 10 min)
-Render OPT-002 params and listen back-to-back with the reference. Write down the primary
-perceptual difference. This anchors all subsequent work.
+### Step 1 — Listen before touching anything ✓ DONE (2026-07-12)
+~~Render OPT-002 params and listen back-to-back with the reference.~~ Done. Triage verdict:
+**Level 0** — the two samples are not in the same perceptual category (see Approach 5 and
+§B.8). Full six-dimension scoring was not completed at this stage; a binary triage verdict
+is sufficient at Level 0. Note: because no per-dimension baseline scores were recorded,
+Step 3's before/after comparison will be relative to the triage level only, not to
+per-dimension deltas.
 
-### Step 2 — Investigate double-reverb (1–2 hours)
-Check whether `HeyAngelRenderer.SchroederReverb` is applied after `SupersawPad.SimpleFDN`.
-If double-reverb confirmed, fix structurally and re-measure with `compare_audio.py`. This
-is potentially free CLAP gain with no optimisation needed.
+### Step 2 — Fix double-reverb (Approach 3, 1–2 hours)
+Remove `SchroederReverb` from `HeyAngelRenderer`'s master bus. Tune `SupersawPad`'s internal
+`SimpleFDN` to match SA's `.room(.7)`. Re-measure with `compare_audio.py`. Then listen again
+and confirm the triage level has risen.
 
-### Step 3 — ~~Fix SmoothLead to 3-voice supersaw~~ (retracted)
+**Important — measure each sub-step separately to avoid confounding:**
+- **Step 2a**: Remove master-bus `SchroederReverb` only. Run `compare_audio.py`. Listen.
+  Record triage level. This isolates the routing fix.
+- **Step 2b**: Tune `SimpleFDN` `room_size` to match SA's `.room(.7)`. Run `compare_audio.py`
+  again. Listen. Record triage level. This isolates the FDN parameter tuning.
+
+Measuring separately makes it possible to know which sub-step drove any improvement —
+important for deciding how much FDN parameter search is worth before OPT-003.
+
+### Step 3 — Listen again (10 min)
+After Step 2, re-run the triage scale (§B.8). Has the level gone up? If yes, note it and
+continue. Once triage reaches Level 2 or above, open the full six-dimension framework
+(`research/analysis/perceptual_evaluation_framework.md` §4) to get per-dimension scores
+that can be compared before/after for all subsequent steps.
+
+### Step 4 — ~~Fix SmoothLead to 3-voice supersaw~~ (retracted)
 This step is removed entirely — see Approach 2 retraction. `SmoothLead` single-oscillator
 is confirmed correct. No action required.
 
-### Step 4 — OPT-003: expanded search space + widened bounds
-After Steps 2–3, run OPT-003 with:
+### Step 5 — OPT-003: expanded search space + widened bounds
+After Steps 1–3, run OPT-003 with:
 - Pad oscillator architecture params in the search space (`saw_count_pad`, `detune_cents_pad`, `centre_mix_pad`)
-- Wider bounds on `kick_decay_s`, `reverb_room`, `reverb_wet`
-- Remove or zero outer `SchroederReverb` from master bus before running (Step 2)
-- Warm-start from OPT-002 best
+- Wider bounds on `kick_decay_s`
+- `SimpleFDN` parameters (`room_size`, `wet`, decay) in the search space — replacing the
+  now-removed `reverb_wet`/`reverb_room` (see Approach 4)
+- Warm-start from OPT-002 best (re-encoded for the new parameter space)
 
-### Step 5 — If CLAP ≥ 0.70: gate check + merge
-### Step 5 — If CLAP still plateaued at ~0.66: declare synthesis layer validated
+### Step 6 — OPT-003 stopping criteria (pre-specified)
+
+Before running OPT-003, the falsification criterion must be written into `experiment_log.md`:
+
+- **Success**: CLAP ≥ 0.70 after structural fixes → gate check, then merge.
+- **Plateau confirmed**: CLAP < 0.66 after 1000+ evaluations with all structural fixes
+  applied → the CLAP ceiling hypothesis is confirmed. Proceed to perceptual evaluation
+  at the new baseline. Do not run further CMA-ES passes before evaluating with the
+  composite objective (Approach 6).
+- **Partial improvement** (0.66–0.70): run Approach 6 composite objective (OPT-004),
+  then gate check.
 
 If three CMA-ES runs across increasingly rich parameter spaces all plateau at 0.62–0.66,
 the CLAP ceiling is likely a metric limitation for this reference/generator pair rather
-than a perceptual gap. At that point, the synthesis stack is validated and the project
-advances to the arrangement arc (build structure, arrangement stages, filter automation).
+than a perceptual gap. At that point, the synthesis stack is validated at the CLAP layer
+and the project advances: either to Approach 6 (composite objective, Layer 2 fidelity)
+or to the arrangement arc if perceptual evaluation confirms the style is already correct.
+
+### Step 7 — If CLAP ≥ 0.70: gate check + merge
+### Step 7 — If CLAP still plateaued after OPT-003: Approach 6 composite objective
 
 ---
 
@@ -444,6 +532,8 @@ def rlpf_to_hz(slider: float) -> float:
 
 ### A.3 `acidenv`
 
+> **Note**: `hey_angel_cover.py` uses `SmoothLead` (`instruments/smooth_lead.py`), not `AcidLead`. The mismatches documented in this section do not affect the current cover render.
+
 #### SA's definition (prebake.strudel, lines 16–19)
 
 ```js
@@ -511,6 +601,8 @@ Q = 2.0 (lead), 2.5 (bass).
 
 ### A.4 `acid` register (the lead/bass preset)
 
+> **Note**: `hey_angel_cover.py` uses `SmoothLead` (`instruments/smooth_lead.py`), not `AcidLead`. The mismatches documented in this section do not affect the current cover render.
+
 #### SA's definition (prebake.strudel, lines 503–510; identical in allscripts lines 181–188)
 
 ```js
@@ -547,7 +639,7 @@ envelope shape, not a direct frequency offset. Peak cutoff ≈ `base × 2^lpenv`
 `instruments/lead.py` `AcidLead`, character preset `'acid'`:
 ```python
 _CHARACTERS = {
-    'acid': (saw_count=3, detune_cents=30, decay_s=0.08, delay_wet=0.7, slider=0.593)
+    'acid': (3, 30.0, 0.08, 0.7, 0.593)  # saw_count, detune_cents, decay_s, delay_wet, slider
 }
 ```
 
@@ -783,7 +875,12 @@ and listener perception, ranked roughly by estimated audibility:
 
 1. **Trancegate off-state is silence in SA; our floor=0.7 is near-continuous.**
    SA: off-slot → 0 (silence). Ours: off-slot → 0.7. The pad never fully quiets between gate
-   events. Fix: set `TRANCEGATE_FLOOR = 0.0` and adjust gain compensation if needed.
+   events. The correct SA target is `TRANCEGATE_FLOOR = 0.0`, but this is not a simple fix:
+   EXP-018 showed that raising the floor from 0.3 to 0.7 improved CLAP (+0.018) and
+   band_energy (+0.011), and the 0.7 value was retained. Going to 0.0 would be more SA-correct
+   structurally but risks regressing metrics below EXP-018 baseline (mfcc ~0.797 was already
+   near the threshold). The tension between SA's true off-state (silence) and the empirically
+   better floor (0.7) is unresolved — investigate before changing `TRANCEGATE_FLOOR`.
 
 2. **Double reverb on master bus** (Approach 3 — confirmed bug).
    Every instrument receives `SchroederReverb`; SA only applies `.room(.7)` to the pad.
@@ -798,10 +895,14 @@ and listener perception, ranked roughly by estimated audibility:
 5. **Lead/bass acidenv base floor: ~1537 Hz vs SA's 100 Hz.**
    SA sweeps the filter over a 32× range; ours sweeps ~1.7×. This is the acid envelope
    character gap. Fix: `base_hz = 100.0` in `instruments/lead.py`.
+   **Caveat**: `hey_angel_cover.py` uses `SmoothLead`, not `AcidLead`. This gap applies
+   to `AcidLead` (`instruments/lead.py`) and does not affect the current cover render.
 
 6. **Acid Q=2 vs SA's Q=12.**
    Q=12 creates the acid resonant peak ("squeal"). Our Q=2 is a mellow soft filter.
    Fix: increase Q in `instruments/lead.py` and `instruments/bass.py`.
+   **Caveat**: `hey_angel_cover.py` uses `SmoothLead`, not `AcidLead`. This gap applies
+   to `AcidLead` and does not affect the current cover render.
 
 7. **Hi-hat: SA uses raw white noise; we add a 6 kHz HPF.**
    SA's hat is full-spectrum white noise with variable decay. Fix: remove HPF; add triangle
@@ -814,3 +915,326 @@ and listener perception, ranked roughly by estimated audibility:
 
 9. **Trancegate P(on): 0.667 (old allscripts) vs SA's 0.75 (current prebake).**
    Minor rhythmic density difference. Fix: `TRANCEGATE_DENSITY = 0.75`.
+
+---
+
+## Appendix B: Approach 1 — Plain Language Explanation
+
+### B.1 The two ideas in Approach 1
+
+Approach 1 bundles two separate problems. Worth separating them.
+
+---
+
+### B.2 Idea A: The normalisation gap (the more important one)
+
+Our supersaw adds up 5 voices then divides by 5. Strudel divides by √5 instead. Dividing
+by √5 gives a louder result than dividing by 5 — about 7.0 dB louder.
+
+So our pad is structurally quieter than SA's by that margin. The optimiser's response was to
+crank `pad_gain` all the way to its upper bound in both OPT-001 and OPT-002 — it was
+compensating for the level difference, not tuning timbre. That means a significant chunk of
+those 4000+ evaluations were spent solving the wrong problem.
+
+The fix is one line in `synth/oscillators.py`: divide by `sqrt(saw_count)` instead of
+`saw_count`. No CMA-ES run needed — it is a structural correction.
+
+---
+
+### B.3 Idea B: Frozen parameters (the search space expansion)
+
+`saw_count` (number of voices) and `detune_cents` (how spread apart they are) are set once
+when `SupersawPad` is constructed and never touched by the optimiser. The optimiser has no
+way to ask "what if the pad used 7 voices instead of 5?" or "what if the detune was 80 cents
+instead of 60?"
+
+SA's confirmed values are 5 voices and 60 cents — so those are already correct. But the
+optimiser has never been allowed to verify that by exploring around them. Adding these to the
+search space lets CMA-ES confirm the current values are optimal, or find something slightly
+better nearby.
+
+`centre_mix_ratio` is a separate, more speculative parameter — it concerns whether the centre
+voice of a supersaw should be louder than the detuned ones (as on the Roland hardware). It is
+labelled a hypothesis because there is no confirmed evidence SA's Strudel implementation
+applies any such weighting.
+
+---
+
+### B.4 The logical priority order
+
+Fix the normalisation bug first — it is structural and costs nothing. Then re-run the
+optimiser from a corrected baseline so it can tune timbre rather than compensate for a level
+deficit. The search space expansion (Idea B) is only meaningful from that corrected starting
+point.
+
+---
+
+## B.5 Approach 2 — Plain Language Explanation (Retracted — No Action Required)
+
+### What the hypothesis was
+
+The thinking was: SA's lead synth is a multi-voice supersaw with 3 voices spread 0.3
+semitones apart — thinner and narrower than the pad's 5-voice version, but still a chord of
+slightly detuned oscillators. Our `SmoothLead` is a single sawtooth with no detuning at all.
+That would be a structural mismatch — one voice versus three.
+
+### Why it was wrong
+
+When the actual source code was checked (`prebake.strudel`, SA's published scripts), her
+`acid` register — the function she uses for the lead — is defined as `unison(1)`. One voice.
+Our single-sawtooth `SmoothLead` is exactly right.
+
+The confusion came from looking at the wrong synth in the same file. A different instrument
+called `spinor` uses 3 voices; the acid lead does not.
+
+### What about the `detune(.5)` in SA's code?
+
+SA's acid register does include `.detune(.5)` — 50 cents of spread. But detuning only has an
+effect when there are multiple voices to spread apart. With `unison(1)`, it does nothing at
+all. There is nothing to match or fix.
+
+### What "retracted" means practically
+
+Do not touch `SmoothLead`. The architecture is confirmed correct. The lead is not a source of
+the CLAP gap.
+
+---
+
+## B.6 Approach 3 — Plain Language Explanation (Confirmed Bug — Fix Before OPT-003)
+
+### What the bug is
+
+SA applies reverb to one thing only: the pad. Everything else — kick, hi-hat, bass, lead,
+pluck — is dry.
+
+Our code does two things wrong:
+1. The pad has its own reverb built in (`SimpleFDN` inside `SupersawPad`)
+2. Then the entire mix — pad included — gets run through a second reverb on the master bus
+   (`SchroederReverb` in `HeyAngelRenderer`)
+
+So the pad gets reverbed twice. Every other instrument gets reverbed once when SA intended
+them to be dry.
+
+### What the optimiser did about it
+
+It couldn't fix the structure, so it tried to find a reverb setting that was the least-wrong
+compromise — wetter and larger than SA's baseline, because it was simultaneously trying to
+add some reverb to the dry instruments while the pad was already drowning in double reverb.
+Neither goal was achievable cleanly with a single reverb parameter.
+
+### What the fix looks like
+
+Remove the master bus reverb entirely. Let the pad's internal `SimpleFDN` be the only reverb
+in the chain, and tune it to match SA's `.room(.7)`. Then everything else stays dry, as
+intended.
+
+### Why this matters before OPT-003
+
+Running another optimiser with a double-reverb in the signal path would be 4000 more
+evaluations against a known structural bug. Fix it first, measure the result, then optimise
+from a correct baseline.
+
+### What this means for what we have been hearing (Approach 3)
+
+This is a serious perceptual oversight that has been present since the beginning.
+
+The double-reverb destroys the most important contrast in trance production: **dry rhythm
+section vs. wet pad**. In SA's mix — and in trance generally — the kick and bass are
+completely dry. That tight, punchy low end is a defining characteristic of the genre. The pad
+is wet and floaty behind it. The contrast between the two is what gives the mix its depth and
+energy.
+
+Our master bus reverb has been applied to everything:
+
+- **Kick and bass**: a reverbed kick loses its transient snap; the tail bleeds into the gaps
+  between beats. A reverbed bass becomes boomy and indistinct rather than tight. This
+  collapses the rhythmic drive that makes trance feel like trance.
+- **Pad**: double reverb makes the tail far longer and washier than intended. The trancegate
+  is supposed to create rhythmic gating — moments of relative silence punctuated by the pad
+  swelling back in. With double reverb, those silences fill with tail from the previous gate
+  event. The gating character softens into a continuous wash.
+
+The result: everything sits in the same reverberant space. The foreground/background
+separation that defines SA's sound has been missing the entire time.
+
+The optimiser's `reverb_wet=0.37` was a compromise forced by the broken structure — dry
+enough not to completely destroy the kick, but then the pad is not wet enough either. It was
+making the best of an unfixable situation. Fixing the structure before OPT-003 removes this
+constraint entirely and should yield a qualitatively different — and better — mix regardless
+of what the CLAP score does.
+
+---
+
+## B.7 Approach 4 — Plain Language Explanation
+
+### What Approach 4 is
+
+Simple idea: when the optimiser runs out of room — when it finds the best value it can but
+that value is sitting right at the edge of the allowed range — you widen the range and run
+again. The optimiser is telling you "I want to go further in this direction but you won't
+let me."
+
+Two parameters hit their limits in OPT-002:
+- `kick_decay_s = 0.499` was AT the 0.50 ceiling. The optimiser wants a longer kick decay.
+  Widen the upper bound to 0.80 and let it keep exploring.
+- `reverb_wet = 0.371` was near the 0.45 ceiling. Wants more wet signal.
+
+`kick_decay_s` is straightforward — widen the bound, run OPT-003, let it find the right kick
+tail length. This is independent of everything else.
+
+### The reverb part: not a "do not do" — a transformation
+
+`reverb_wet` is a parameter of the master bus reverb — the one Approach 3 identifies as a
+confirmed bug that should be removed entirely.
+
+If Approach 3 is fixed first (which it should be), the master bus reverb ceases to exist. At
+that point `reverb_wet` and `reverb_room` are no longer valid parameters — there is nothing
+for them to control. Widening their bounds would be widening parameters that do not exist.
+
+But the underlying need does not go away. After fixing Approach 3, the pad's internal
+`SimpleFDN` becomes the only reverb in the system. Its parameters (`room_size`, `wet`,
+decay time) are currently hardcoded and not in the optimiser's search space at all. Those
+need to be added to OPT-003 instead.
+
+So Approach 4 is not "do not do" — it transforms:
+- `kick_decay_s` widening: **unchanged, do it**
+- `reverb_wet`/`reverb_room` widening: **superseded** — replace with `SimpleFDN` parameters
+  in the OPT-003 search space after Approach 3 is fixed
+
+The spirit is the same — give the optimiser room to tune reverb character. The parameters
+just change once the signal chain is correct.
+
+### The correct ordering
+
+1. Fix Approach 3 (remove master bus reverb)
+2. Add `SimpleFDN` parameters to the search space
+3. Run OPT-003 with `kick_decay_s` widened and `SimpleFDN` parameters included
+4. Do not include `reverb_wet` or `reverb_room` in OPT-003 at all
+
+---
+
+## B.8 Approach 5 — Plain Language Explanation
+
+### What Approach 5 is
+
+Before writing more code, just listen. Render the OPT-002 output, put it next to the SA
+reference, and write down the single most obvious thing that sounds different.
+
+### Result (2026-07-12): hypothesis rejected — gap is structural
+
+The two samples were listened to back-to-back. The verdict was immediate: they are not even
+in the same perceptual category. This is not a "close but slightly off" situation. It is more
+like comparing a tree and a cat — no fine-grained rubric is needed to know they are not the
+same thing.
+
+This rules out the hypothesis. The 0.078 CLAP gap is not a metric artefact. The gap is real,
+large, and audible.
+
+### Triage scale — use this before the full framework
+
+The full perceptual evaluation framework (`research/analysis/perceptual_evaluation_framework.md`)
+is designed for fine-grained diagnosis when the samples are close. It is overkill when the
+gap is structural. Use this simpler triage scale first:
+
+| Level | Description | Action |
+|---|---|---|
+| **0 — Different category** | A non-expert would not identify the two as related | Fix structural bugs first. Do not run more evaluations until at Level 1. |
+| **1 — Same genre, wrong feel** | Clearly trance, clearly not SA | Identify the two or three most obvious differences. Fix those. |
+| **2 — SA-adjacent** | Someone familiar with SA might recognise the intent | Use the full six-dimension framework to diagnose remaining gaps. |
+| **3 — Close** | A careful listener notices specific differences | Use the full framework. Consider whether CLAP ceiling is the limiting factor. |
+| **4 — Indistinguishable** | BR-1 acceptance criterion met | Done. |
+
+**Current state: Level 0.** OPT-002 output is not in the same perceptual category as SA's
+reference. The structural fixes (Approach 3: double-reverb, Approach 1: normalisation) must
+be applied before another perceptual evaluation makes sense.
+
+### When to re-run Approach 5
+
+After each structural fix, do a quick triage listen. Ask one question: has the level number
+gone up? If yes, note it and keep going. Only open the full framework when you reach Level 2
+or above — that is when the vocabulary and six-dimension scoring start to pay off.
+
+---
+
+## B.9 Approach 6 — Plain Language Explanation
+
+### What Approach 6 is
+
+Right now, the optimiser has a single measuring stick: CLAP score. CLAP is a
+*semantic* similarity metric — it asks "do these two clips feel like the same kind of
+music?" rather than "do they have the same spectral shape?" Think of it as asking
+whether a human expert would put them in the same genre category, not whether their
+waveforms are similar.
+
+Approach 6 asks: what if we gave the optimiser additional measuring sticks alongside
+CLAP?
+
+Three candidates:
+
+1. **Multi-scale spectral loss** — compare the magnitude spectrum at several FFT window
+   sizes simultaneously (e.g. 512, 1024, 2048, 4096 samples). Large windows are good
+   at pitch and timbre. Small windows are good at transient timing and attack shape.
+   Using all of them catches fine spectral mismatches that CLAP glosses over.
+
+2. **Mel-window cosine** — instead of one global embedding for the whole 27-second
+   clip, slice it into 1-bar windows (~1.7s at 140 BPM) and measure similarity in
+   each window, then average. CLAP sees the whole clip at once and can miss temporal
+   structure — a pad with the wrong gate rhythm might still score well if the overall
+   timbre matches. Per-bar measurement is more sensitive to rhythm and dynamics.
+
+3. **Composite objective** — combine all three with weights:
+   `score = α·CLAP + β·mel_window_cosine + γ·mfcc_cosine`. Each term is sensitive
+   to a different aspect of the sound.
+
+### The metric question is not binary — it is a continuum
+
+There is a temptation to frame this as: "CLAP for style, signal-level for the cover."
+That is too simple. The cover requires solving both problems in sequence:
+
+**Step 1 — Get the synthesis style right (Layer 1).**
+This means the instrument architecture, timbral character, and synthesis choices must
+match SA's general approach across her tracks — not just this specific recording. CLAP
+is the right signal here because it measures style at a semantic level, not waveform
+shape. You cannot substitute signal-level metrics at this stage: a perfectly waveform-
+matched output built on wrong architecture is not SA's style, it is a distortion of it.
+
+**Step 2 — Fit this specific clip (Layer 2).**
+Once the style is correct, signal-level objectives become useful. CLAP alone is too
+abstract to close the remaining gap — two clips can score 0.90 CLAP while sounding
+noticeably different in gate rhythm, transient timing, and fine spectral shape. At this
+stage, mel-window cosine and multi-scale STFT give the optimiser resolution that CLAP
+cannot see.
+
+**The composite objective reflects this as a continuum, not a switch.**
+The weights in `score = α·CLAP + β·mel_window_cosine + γ·mfcc_cosine` should shift
+as quality improves:
+
+- **Early / structural bugs present**: α dominates. CLAP keeps the optimiser in the
+  right style neighbourhood. Signal-level terms are noise at this stage — they are
+  measuring fine differences between two things that are structurally wrong.
+- **After structural fixes, mid-optimisation**: balanced weights. CLAP prevents style
+  drift; signal-level terms pull toward the specific recording.
+- **Late / style converged, fine-tuning**: β and γ dominate. The style is right; now
+  close the remaining gap to this specific clip.
+
+Treating the composite as a fixed-weight function throughout the optimisation is a
+mistake. The appropriate balance depends on where you are in the Layer 1 → Layer 2
+progression.
+
+### Verdict: defer — correct direction, wrong time
+
+Approach 6 is the right approach for OPT-004 or later, after structural fixes and
+OPT-003. The reason to defer is not conceptual but practical:
+
+1. At triage Level 0, the gap is structural. A more sensitive objective cannot fix an
+   architecture bug — it will optimise noisily on top of broken synthesis.
+2. CLAP must be a meaningful signal before adding composite terms. If CLAP cannot
+   distinguish good from bad at the current quality level, the composite weights are
+   arbitrary.
+3. Once structural fixes land and OPT-003 moves us to triage Level 1 or 2, Approach 6
+   becomes the natural next step — the composite gives the optimiser resolution to
+   close the gap that CLAP alone cannot see.
+
+**For Death Angel (Layer 3)**: signal-level objectives are wrong there. The goal is
+style generalisation across many recordings, not fidelity to any specific clip.
+CLAP-only is correct for that phase. See the three-layer note at the top of this document.

@@ -62,9 +62,19 @@ _RESEARCH_DIR = _REPO_ROOT / 'research'
 
 # ── snippet metadata ──────────────────────────────────────────────────────────
 _SNIPPET_LABELS = {
-    'c1': 'pad only',
-    'c2': 'pad + kick',
-    'c3': 'experiment (A minor)',
+    'c1':  'pad only',
+    'c2':  'pad + kick',
+    'c3':  'experiment (A minor)',
+    'c4':  'ear-training: acid lead',
+    'c5':  'ear-training: noisehat',
+    'c6':  'ear-training: gate ON',
+    'c7':  'ear-training: gate OFF',
+    'c8':  'ear-training: sweep ON',
+    'c9':  'ear-training: sweep OFF',
+    'c10': 'ear-training: kick dry',
+    'c11': 'ear-training: kick wet',
+    'c12': 'ear-training: pump ON',
+    'c13': 'ear-training: pump OFF',
 }
 
 
